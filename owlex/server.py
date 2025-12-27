@@ -425,7 +425,21 @@ async def council_ask(
 
 def main():
     """Entry point for owlex-server command."""
+    import argparse
     import signal
+
+    from . import __version__
+
+    parser = argparse.ArgumentParser(
+        prog="owlex-server",
+        description="MCP server for multi-agent CLI orchestration"
+    )
+    parser.add_argument(
+        "-v", "--version",
+        action="version",
+        version=f"owlex {__version__}"
+    )
+    parser.parse_args()
 
     async def run_with_cleanup():
         loop = asyncio.get_running_loop()
