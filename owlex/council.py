@@ -137,7 +137,11 @@ class Council:
         working_directory: str | None,
         timeout: int,
     ) -> CouncilRound:
-        """Run the first round of parallel queries."""
+        """Run the first round of parallel queries.
+
+        Option A: R1 uses exec mode (clean start) for all agents.
+        Session IDs are captured after completion for use in R2.
+        """
         round1_start = datetime.now()
         excluded = config.council.exclude_agents
 
@@ -145,6 +149,7 @@ class Council:
         async_tasks = []
 
         # Create tasks for non-excluded agents
+        # All R1 agents use exec mode (clean start) per Option A
         if "aider" not in excluded:
             aider_task = self._engine.create_task(
                 command=f"council_{Agent.AIDER.value}",
@@ -174,10 +179,9 @@ class Council:
             tasks["codex"] = codex_task
 
             async def run_codex():
-                # Resume from last session to maintain conversation context
+                # Clean start for R1 - session ID captured after completion
                 await self._engine.run_agent(
-                    codex_task, codex_runner, mode="resume",
-                    session_ref="--last",
+                    codex_task, codex_runner, mode="exec",
                     prompt=prompt, working_directory=working_directory, enable_search=config.codex.enable_search
                 )
                 elapsed = (datetime.now() - round1_start).total_seconds()
@@ -196,10 +200,9 @@ class Council:
             tasks["gemini"] = gemini_task
 
             async def run_gemini():
-                # Resume from latest session to maintain conversation context
+                # Clean start for R1 - session ID captured after completion
                 await self._engine.run_agent(
-                    gemini_task, gemini_runner, mode="resume",
-                    session_ref="latest",
+                    gemini_task, gemini_runner, mode="exec",
                     prompt=prompt, working_directory=working_directory
                 )
                 elapsed = (datetime.now() - round1_start).total_seconds()
@@ -218,10 +221,9 @@ class Council:
             tasks["opencode"] = opencode_task
 
             async def run_opencode():
-                # Resume from last session to maintain conversation context
+                # Clean start for R1 - session ID captured after completion
                 await self._engine.run_agent(
-                    opencode_task, opencode_runner, mode="resume",
-                    session_ref="--continue",
+                    opencode_task, opencode_runner, mode="exec",
                     prompt=prompt, working_directory=working_directory
                 )
                 elapsed = (datetime.now() - round1_start).total_seconds()
@@ -251,11 +253,17 @@ class Council:
         round1_elapsed = (datetime.now() - round1_start).total_seconds()
         self.log(f"Round 1 complete ({round1_elapsed:.1f}s)")
 
+        # Capture session IDs from completed R1 agents for R2 resume
+        # Each runner parses session ID from filesystem (most reliable method)
+        codex_session = codex_runner.parse_session_id("") if "codex" in tasks and tasks["codex"].status == "completed" else None
+        gemini_session = gemini_runner.parse_session_id("") if "gemini" in tasks and tasks["gemini"].status == "completed" else None
+        opencode_session = opencode_runner.parse_session_id("") if "opencode" in tasks and tasks["opencode"].status == "completed" else None
+
         return CouncilRound(
             aider=build_agent_response(tasks["aider"], Agent.AIDER) if "aider" in tasks else None,
-            codex=build_agent_response(tasks["codex"], Agent.CODEX) if "codex" in tasks else None,
-            gemini=build_agent_response(tasks["gemini"], Agent.GEMINI) if "gemini" in tasks else None,
-            opencode=build_agent_response(tasks["opencode"], Agent.OPENCODE) if "opencode" in tasks else None,
+            codex=build_agent_response(tasks["codex"], Agent.CODEX, session_id=codex_session) if "codex" in tasks else None,
+            gemini=build_agent_response(tasks["gemini"], Agent.GEMINI, session_id=gemini_session) if "gemini" in tasks else None,
+            opencode=build_agent_response(tasks["opencode"], Agent.OPENCODE, session_id=opencode_session) if "opencode" in tasks else None,
         )
 
     async def _run_round_2(
@@ -267,15 +275,19 @@ class Council:
         critique: bool,
         timeout: int,
     ) -> CouncilRound:
-        """Run the second round of deliberation."""
+        """Run the second round of deliberation.
+
+        Option A: R2 uses explicit session IDs from R1 to resume.
+        Falls back to exec mode if session ID is not available.
+        """
         self.log("Round 2: deliberation phase...")
         excluded = config.council.exclude_agents
 
-        # Check which R1 agents succeeded - only resume if R1 succeeded
-        # If R1 failed, we use exec mode instead to avoid invalid session resume
-        codex_r1_ok = round_1.codex and round_1.codex.status == "completed"
-        gemini_r1_ok = round_1.gemini and round_1.gemini.status == "completed"
-        opencode_r1_ok = round_1.opencode and round_1.opencode.status == "completed"
+        # Get explicit session IDs from R1 (Option A)
+        # If session_id is None, we fall back to exec mode
+        codex_session = round_1.codex.session_id if round_1.codex else None
+        gemini_session = round_1.gemini.session_id if round_1.gemini else None
+        opencode_session = round_1.opencode.session_id if round_1.opencode else None
 
         aider_content = (round_1.aider.content or round_1.aider.error or "(no response)") if round_1.aider else None
         codex_content = (round_1.codex.content or round_1.codex.error or "(no response)") if round_1.codex else None
@@ -297,17 +309,13 @@ class Council:
         tasks = {}
         async_tasks = []
 
-        # R2 resumes from R1 sessions - agents have full R1 context
+        # R2 resumes from R1 sessions using explicit session IDs (Option A)
         # Aider: uses exec (context preserved via .aider.chat.history.md file)
-        # Codex: uses resume --last (continues R1 session)
-        # Gemini: uses -r latest (continues R1 session)
-        # OpenCode: uses --continue (continues R1 session)
+        # Codex: uses resume with explicit session ID from R1
+        # Gemini: uses resume with explicit session index from R1
+        # OpenCode: uses resume with explicit session ID from R1
         #
-        # NOTE: Using global session refs (--last, latest, --continue) can cause
-        # race conditions under concurrent use. If multiple council requests run
-        # simultaneously, R2 may resume the wrong R1 session. To fully fix this,
-        # we'd need to parse explicit session IDs from R1 output. For now, we
-        # validate that R1 succeeded before attempting resume.
+        # If session ID is None (R1 failed or parsing failed), fall back to exec mode
 
         if "aider" not in excluded:
             aider_delib_task = self._engine.create_task(
@@ -337,12 +345,15 @@ class Council:
             )
             tasks["codex"] = codex_delib_task
 
+            # Capture session in closure
+            _codex_session = codex_session
+
             async def run_codex_delib():
-                # Resume from R1 session if R1 succeeded, otherwise use exec mode
-                if codex_r1_ok:
+                # Resume with explicit session ID if available, otherwise exec
+                if _codex_session:
                     await self._engine.run_agent(
                         codex_delib_task, codex_runner, mode="resume",
-                        session_ref="--last",
+                        session_ref=_codex_session,
                         prompt=deliberation_prompt, working_directory=working_directory,
                         enable_search=config.codex.enable_search
                     )
@@ -366,12 +377,15 @@ class Council:
             )
             tasks["gemini"] = gemini_delib_task
 
+            # Capture session in closure
+            _gemini_session = gemini_session
+
             async def run_gemini_delib():
-                # Resume from R1 session if R1 succeeded, otherwise use exec mode
-                if gemini_r1_ok:
+                # Resume with explicit session index if available, otherwise exec
+                if _gemini_session:
                     await self._engine.run_agent(
                         gemini_delib_task, gemini_runner, mode="resume",
-                        session_ref="latest",
+                        session_ref=_gemini_session,
                         prompt=deliberation_prompt, working_directory=working_directory
                     )
                 else:
@@ -393,12 +407,15 @@ class Council:
             )
             tasks["opencode"] = opencode_delib_task
 
+            # Capture session in closure
+            _opencode_session = opencode_session
+
             async def run_opencode_delib():
-                # Resume from R1 session if R1 succeeded, otherwise use exec mode
-                if opencode_r1_ok:
+                # Resume with explicit session ID if available, otherwise exec
+                if _opencode_session:
                     await self._engine.run_agent(
                         opencode_delib_task, opencode_runner, mode="resume",
-                        session_ref="--continue",
+                        session_ref=_opencode_session,
                         prompt=deliberation_prompt, working_directory=working_directory
                     )
                 else:

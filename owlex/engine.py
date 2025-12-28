@@ -25,7 +25,11 @@ def extract_content(result: str | None, prefix: str) -> str:
     return result.strip()
 
 
-def build_agent_response(task: Task, agent: Agent | str) -> AgentResponse:
+def build_agent_response(
+    task: Task,
+    agent: Agent | str,
+    session_id: str | None = None,
+) -> AgentResponse:
     """Build structured response for an agent."""
     # Normalize to string for backward compatibility
     agent_name = agent.value if isinstance(agent, Agent) else agent
@@ -48,6 +52,7 @@ def build_agent_response(task: Task, agent: Agent | str) -> AgentResponse:
             if task.completion_time else None
         ),
         task_id=task.task_id,
+        session_id=session_id,
     )
 
 

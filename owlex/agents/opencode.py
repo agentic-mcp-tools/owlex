@@ -3,10 +3,45 @@ OpenCode CLI agent runner.
 """
 
 import re
+from pathlib import Path
 from typing import Callable
 
 from ..config import config
 from .base import AgentRunner, AgentCommand
+
+
+def get_latest_opencode_session() -> str | None:
+    """
+    Find the most recent OpenCode session ID from filesystem.
+
+    OpenCode stores sessions in ~/.local/share/opencode/storage/session/<project>/ses_*.json
+    The session ID is extracted from the filename (without .json extension).
+
+    Returns:
+        Session ID (e.g., ses_49b5d1b81ffeZfa2uTg3NVmKrH) if found, None otherwise
+    """
+    opencode_dir = Path.home() / ".local" / "share" / "opencode" / "storage" / "session"
+    if not opencode_dir.exists():
+        return None
+
+    # Find the most recent session file across all project directories
+    latest_file: Path | None = None
+    latest_mtime: float = 0
+
+    for project_dir in opencode_dir.iterdir():
+        if not project_dir.is_dir():
+            continue
+        for session_file in project_dir.glob("ses_*.json"):
+            mtime = session_file.stat().st_mtime
+            if mtime > latest_mtime:
+                latest_mtime = mtime
+                latest_file = session_file
+
+    if latest_file is None:
+        return None
+
+    # Session ID is the filename without .json extension
+    return latest_file.stem
 
 
 def clean_opencode_output(raw_output: str, original_prompt: str = "") -> str:
@@ -111,3 +146,12 @@ class OpenCodeRunner(AgentRunner):
 
     def get_output_cleaner(self) -> Callable[[str, str], str]:
         return clean_opencode_output
+
+    def parse_session_id(self, output: str) -> str | None:
+        """
+        Get session ID for OpenCode.
+
+        OpenCode doesn't output session ID in stdout, so we check the filesystem
+        for the most recently created session file.
+        """
+        return get_latest_opencode_session()

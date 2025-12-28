@@ -3,10 +3,60 @@ Codex CLI agent runner.
 """
 
 import re
+from datetime import datetime
+from pathlib import Path
 from typing import Callable
 
 from ..config import config
 from .base import AgentRunner, AgentCommand
+
+
+def get_latest_codex_session() -> str | None:
+    """
+    Find the most recent Codex session ID from filesystem.
+
+    Codex stores sessions in ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
+    The UUID is extracted from the filename.
+
+    Returns:
+        Session UUID if found, None otherwise
+    """
+    codex_dir = Path.home() / ".codex" / "sessions"
+    if not codex_dir.exists():
+        return None
+
+    # Find the most recent session file across all date directories
+    latest_file: Path | None = None
+    latest_mtime: float = 0
+
+    # Check recent date directories (today and yesterday to handle timezone edge cases)
+    now = datetime.now()
+    date_dirs = [
+        codex_dir / f"{now.year}" / f"{now.month:02d}" / f"{now.day:02d}",
+        codex_dir / f"{now.year}" / f"{now.month:02d}" / f"{now.day - 1:02d}" if now.day > 1 else None,
+    ]
+
+    for date_dir in date_dirs:
+        if date_dir is None or not date_dir.exists():
+            continue
+        for session_file in date_dir.glob("rollout-*.jsonl"):
+            mtime = session_file.stat().st_mtime
+            if mtime > latest_mtime:
+                latest_mtime = mtime
+                latest_file = session_file
+
+    if latest_file is None:
+        return None
+
+    # Extract UUID from filename: rollout-YYYY-MM-DDTHH-MM-SS-<UUID>.jsonl
+    # The UUID is the last hyphen-separated segment before .jsonl
+    filename = latest_file.stem  # Remove .jsonl
+    # Pattern: rollout-2025-12-28T13-33-54-019b64bc-81d9-7ba1-821d-b90ccfc8876f
+    match = re.search(r'rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([a-f0-9-]+)$', filename)
+    if match:
+        return match.group(1)
+
+    return None
 
 
 def clean_codex_output(raw_output: str, original_prompt: str = "") -> str:
@@ -102,3 +152,12 @@ class CodexRunner(AgentRunner):
 
     def get_output_cleaner(self) -> Callable[[str, str], str]:
         return clean_codex_output
+
+    def parse_session_id(self, output: str) -> str | None:
+        """
+        Get session ID for Codex.
+
+        Codex doesn't output session ID in stdout, so we check the filesystem
+        for the most recently created session file.
+        """
+        return get_latest_codex_session()

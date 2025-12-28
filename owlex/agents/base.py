@@ -58,3 +58,18 @@ class AgentRunner(ABC):
     def get_output_cleaner(self) -> Callable[[str, str], str]:
         """Return the output cleaning function for this agent."""
         pass
+
+    def parse_session_id(self, output: str) -> str | None:
+        """
+        Parse session ID from agent's output.
+
+        Override in subclasses to extract session IDs from CLI output.
+        Returns None if no session ID found (will trigger fallback to exec mode).
+
+        Args:
+            output: The agent's stdout/stderr output
+
+        Returns:
+            Session ID string if found, None otherwise
+        """
+        return None

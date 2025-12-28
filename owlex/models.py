@@ -88,6 +88,7 @@ class AgentResponse(BaseModel):
     error: str | None = None
     duration_seconds: float | None = None
     task_id: str
+    session_id: str | None = None  # Explicit session ID for resume (Option A)
 
 
 class ClaudeOpinion(BaseModel):
