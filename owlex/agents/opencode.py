@@ -2,7 +2,9 @@
 OpenCode CLI agent runner.
 """
 
+import hashlib
 import re
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -10,12 +12,35 @@ from ..config import config
 from .base import AgentRunner, AgentCommand
 
 
-def get_latest_opencode_session() -> str | None:
+def _get_opencode_project_hash(working_directory: str) -> str:
+    """
+    Compute the project hash that OpenCode uses for session storage.
+
+    OpenCode stores sessions in ~/.local/share/opencode/storage/session/<hash>/
+    The hash is derived from the working directory path.
+    """
+    # OpenCode uses SHA1 of the absolute path
+    abs_path = Path(working_directory).resolve()
+    return hashlib.sha1(str(abs_path).encode()).hexdigest()
+
+
+def get_latest_opencode_session(
+    working_directory: str | None = None,
+    since_mtime: float | None = None,
+    max_retries: int = 3,
+    retry_delay: float = 0.3,
+) -> str | None:
     """
     Find the most recent OpenCode session ID from filesystem.
 
     OpenCode stores sessions in ~/.local/share/opencode/storage/session/<project>/ses_*.json
     The session ID is extracted from the filename (without .json extension).
+
+    Args:
+        working_directory: Project directory to scope session search.
+        since_mtime: Only consider sessions created after this timestamp.
+        max_retries: Number of retries if no session found.
+        retry_delay: Delay between retries in seconds.
 
     Returns:
         Session ID (e.g., ses_49b5d1b81ffeZfa2uTg3NVmKrH) if found, None otherwise
@@ -24,24 +49,48 @@ def get_latest_opencode_session() -> str | None:
     if not opencode_dir.exists():
         return None
 
-    # Find the most recent session file across all project directories
-    latest_file: Path | None = None
-    latest_mtime: float = 0
+    for attempt in range(max_retries):
+        latest_file: Path | None = None
+        latest_mtime: float = 0
 
-    for project_dir in opencode_dir.iterdir():
-        if not project_dir.is_dir():
-            continue
-        for session_file in project_dir.glob("ses_*.json"):
-            mtime = session_file.stat().st_mtime
-            if mtime > latest_mtime:
-                latest_mtime = mtime
-                latest_file = session_file
+        # If working_directory is specified, only check that project's hash
+        if working_directory:
+            project_hash = _get_opencode_project_hash(working_directory)
+            project_dirs = [opencode_dir / project_hash]
+        else:
+            # Fallback: check all project directories (less safe)
+            try:
+                project_dirs = [d for d in opencode_dir.iterdir() if d.is_dir()]
+            except OSError:
+                return None
 
-    if latest_file is None:
-        return None
+        for project_dir in project_dirs:
+            if not project_dir.exists():
+                continue
+            try:
+                for session_file in project_dir.glob("ses_*.json"):
+                    try:
+                        mtime = session_file.stat().st_mtime
+                        # Skip files older than since_mtime if specified
+                        if since_mtime is not None and mtime < since_mtime:
+                            continue
+                        if mtime > latest_mtime:
+                            latest_mtime = mtime
+                            latest_file = session_file
+                    except OSError:
+                        continue
+            except OSError:
+                continue
 
-    # Session ID is the filename without .json extension
-    return latest_file.stem
+        if latest_file is not None:
+            # Session ID is the filename without .json extension
+            return latest_file.stem
+
+        # Retry with delay if no session found
+        if attempt < max_retries - 1:
+            time.sleep(retry_delay)
+
+    return None
 
 
 def clean_opencode_output(raw_output: str, original_prompt: str = "") -> str:
@@ -147,11 +196,24 @@ class OpenCodeRunner(AgentRunner):
     def get_output_cleaner(self) -> Callable[[str, str], str]:
         return clean_opencode_output
 
-    def parse_session_id(self, output: str) -> str | None:
+    def parse_session_id(
+        self,
+        output: str,
+        since_mtime: float | None = None,
+        working_directory: str | None = None,
+    ) -> str | None:
         """
         Get session ID for OpenCode.
 
         OpenCode doesn't output session ID in stdout, so we check the filesystem
         for the most recently created session file.
+
+        Args:
+            output: Ignored (OpenCode doesn't output session IDs)
+            since_mtime: Only consider sessions created after this timestamp
+            working_directory: Project directory to scope session search
         """
-        return get_latest_opencode_session()
+        return get_latest_opencode_session(
+            working_directory=working_directory,
+            since_mtime=since_mtime,
+        )

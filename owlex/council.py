@@ -254,10 +254,43 @@ class Council:
         self.log(f"Round 1 complete ({round1_elapsed:.1f}s)")
 
         # Capture session IDs from completed R1 agents for R2 resume
-        # Each runner parses session ID from filesystem (most reliable method)
-        codex_session = codex_runner.parse_session_id("") if "codex" in tasks and tasks["codex"].status == "completed" else None
-        gemini_session = gemini_runner.parse_session_id("") if "gemini" in tasks and tasks["gemini"].status == "completed" else None
-        opencode_session = opencode_runner.parse_session_id("") if "opencode" in tasks and tasks["opencode"].status == "completed" else None
+        # Pass since_mtime (R1 start) and working_directory to scope session discovery
+        r1_start_mtime = round1_start.timestamp()
+
+        # Parse session IDs with validation
+        codex_session = None
+        gemini_session = None
+        opencode_session = None
+
+        if "codex" in tasks and tasks["codex"].status == "completed":
+            codex_session = codex_runner.parse_session_id(
+                "", since_mtime=r1_start_mtime, working_directory=working_directory
+            )
+            if codex_session and not codex_runner.validate_session_id(codex_session):
+                self.log(f"Codex session ID validation failed: {codex_session}")
+                codex_session = None
+            elif not codex_session:
+                self.log("Codex session ID not found, R2 will use exec mode")
+
+        if "gemini" in tasks and tasks["gemini"].status == "completed":
+            gemini_session = gemini_runner.parse_session_id(
+                "", since_mtime=r1_start_mtime, working_directory=working_directory
+            )
+            if gemini_session and not gemini_runner.validate_session_id(gemini_session):
+                self.log(f"Gemini session ID validation failed: {gemini_session}")
+                gemini_session = None
+            elif not gemini_session:
+                self.log("Gemini session ID not found, R2 will use exec mode")
+
+        if "opencode" in tasks and tasks["opencode"].status == "completed":
+            opencode_session = opencode_runner.parse_session_id(
+                "", since_mtime=r1_start_mtime, working_directory=working_directory
+            )
+            if opencode_session and not opencode_runner.validate_session_id(opencode_session):
+                self.log(f"OpenCode session ID validation failed: {opencode_session}")
+                opencode_session = None
+            elif not opencode_session:
+                self.log("OpenCode session ID not found, R2 will use exec mode")
 
         return CouncilRound(
             aider=build_agent_response(tasks["aider"], Agent.AIDER) if "aider" in tasks else None,

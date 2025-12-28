@@ -3,7 +3,8 @@ Codex CLI agent runner.
 """
 
 import re
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -11,12 +12,22 @@ from ..config import config
 from .base import AgentRunner, AgentCommand
 
 
-def get_latest_codex_session() -> str | None:
+def get_latest_codex_session(
+    since_mtime: float | None = None,
+    max_retries: int = 3,
+    retry_delay: float = 0.3,
+) -> str | None:
     """
     Find the most recent Codex session ID from filesystem.
 
     Codex stores sessions in ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
     The UUID is extracted from the filename.
+
+    Args:
+        since_mtime: Only consider files modified after this timestamp.
+                     Used to scope to sessions created during current run.
+        max_retries: Number of retries if no session found (handles I/O lag).
+        retry_delay: Delay between retries in seconds.
 
     Returns:
         Session UUID if found, None otherwise
@@ -25,36 +36,47 @@ def get_latest_codex_session() -> str | None:
     if not codex_dir.exists():
         return None
 
-    # Find the most recent session file across all date directories
-    latest_file: Path | None = None
-    latest_mtime: float = 0
+    for attempt in range(max_retries):
+        latest_file: Path | None = None
+        latest_mtime: float = 0
 
-    # Check recent date directories (today and yesterday to handle timezone edge cases)
-    now = datetime.now()
-    date_dirs = [
-        codex_dir / f"{now.year}" / f"{now.month:02d}" / f"{now.day:02d}",
-        codex_dir / f"{now.year}" / f"{now.month:02d}" / f"{now.day - 1:02d}" if now.day > 1 else None,
-    ]
+        # Check recent date directories (today and yesterday)
+        # Use timedelta for correct month/year boundary handling
+        now = datetime.now()
+        yesterday = now - timedelta(days=1)
+        date_dirs = [
+            codex_dir / f"{now.year}" / f"{now.month:02d}" / f"{now.day:02d}",
+            codex_dir / f"{yesterday.year}" / f"{yesterday.month:02d}" / f"{yesterday.day:02d}",
+        ]
 
-    for date_dir in date_dirs:
-        if date_dir is None or not date_dir.exists():
-            continue
-        for session_file in date_dir.glob("rollout-*.jsonl"):
-            mtime = session_file.stat().st_mtime
-            if mtime > latest_mtime:
-                latest_mtime = mtime
-                latest_file = session_file
+        for date_dir in date_dirs:
+            if not date_dir.exists():
+                continue
+            try:
+                for session_file in date_dir.glob("rollout-*.jsonl"):
+                    try:
+                        mtime = session_file.stat().st_mtime
+                        # Skip files older than since_mtime if specified
+                        if since_mtime is not None and mtime < since_mtime:
+                            continue
+                        if mtime > latest_mtime:
+                            latest_mtime = mtime
+                            latest_file = session_file
+                    except OSError:
+                        continue  # File may have been deleted
+            except OSError:
+                continue  # Directory access error
 
-    if latest_file is None:
-        return None
+        if latest_file is not None:
+            # Extract UUID from filename
+            filename = latest_file.stem
+            match = re.search(r'rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([a-f0-9-]+)$', filename)
+            if match:
+                return match.group(1)
 
-    # Extract UUID from filename: rollout-YYYY-MM-DDTHH-MM-SS-<UUID>.jsonl
-    # The UUID is the last hyphen-separated segment before .jsonl
-    filename = latest_file.stem  # Remove .jsonl
-    # Pattern: rollout-2025-12-28T13-33-54-019b64bc-81d9-7ba1-821d-b90ccfc8876f
-    match = re.search(r'rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([a-f0-9-]+)$', filename)
-    if match:
-        return match.group(1)
+        # Retry with delay if no session found (I/O lag)
+        if attempt < max_retries - 1:
+            time.sleep(retry_delay)
 
     return None
 
@@ -153,11 +175,21 @@ class CodexRunner(AgentRunner):
     def get_output_cleaner(self) -> Callable[[str, str], str]:
         return clean_codex_output
 
-    def parse_session_id(self, output: str) -> str | None:
+    def parse_session_id(
+        self,
+        output: str,
+        since_mtime: float | None = None,
+        working_directory: str | None = None,
+    ) -> str | None:
         """
         Get session ID for Codex.
 
         Codex doesn't output session ID in stdout, so we check the filesystem
         for the most recently created session file.
+
+        Args:
+            output: Ignored (Codex doesn't output session IDs)
+            since_mtime: Only consider sessions created after this timestamp
+            working_directory: Ignored (Codex sessions are global, not project-scoped)
         """
-        return get_latest_codex_session()
+        return get_latest_codex_session(since_mtime=since_mtime)
