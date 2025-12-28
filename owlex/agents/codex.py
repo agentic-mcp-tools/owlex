@@ -2,8 +2,8 @@
 Codex CLI agent runner.
 """
 
+import asyncio
 import re
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
@@ -12,7 +12,7 @@ from ..config import config
 from .base import AgentRunner, AgentCommand
 
 
-def get_latest_codex_session(
+async def get_latest_codex_session(
     since_mtime: float | None = None,
     max_retries: int = 3,
     retry_delay: float = 0.3,
@@ -75,8 +75,9 @@ def get_latest_codex_session(
                 return match.group(1)
 
         # Retry with delay if no session found (I/O lag)
+        # Uses asyncio.sleep to avoid blocking the event loop
         if attempt < max_retries - 1:
-            time.sleep(retry_delay)
+            await asyncio.sleep(retry_delay)
 
     return None
 
@@ -175,7 +176,7 @@ class CodexRunner(AgentRunner):
     def get_output_cleaner(self) -> Callable[[str, str], str]:
         return clean_codex_output
 
-    def parse_session_id(
+    async def parse_session_id(
         self,
         output: str,
         since_mtime: float | None = None,
@@ -187,9 +188,12 @@ class CodexRunner(AgentRunner):
         Codex doesn't output session ID in stdout, so we check the filesystem
         for the most recently created session file.
 
+        Note: Codex sessions are stored globally (not project-scoped), so
+        working_directory is ignored. Session scoping relies on since_mtime.
+
         Args:
             output: Ignored (Codex doesn't output session IDs)
             since_mtime: Only consider sessions created after this timestamp
-            working_directory: Ignored (Codex sessions are global, not project-scoped)
+            working_directory: Ignored (Codex sessions are global)
         """
-        return get_latest_codex_session(since_mtime=since_mtime)
+        return await get_latest_codex_session(since_mtime=since_mtime)

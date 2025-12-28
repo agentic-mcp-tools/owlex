@@ -2,9 +2,10 @@
 OpenCode CLI agent runner.
 """
 
-import hashlib
+import asyncio
+import json
+import os
 import re
-import time
 from pathlib import Path
 from typing import Callable
 
@@ -12,19 +13,41 @@ from ..config import config
 from .base import AgentRunner, AgentCommand
 
 
-def _get_opencode_project_hash(working_directory: str) -> str:
+def _get_opencode_project_id(working_directory: str) -> str | None:
     """
-    Compute the project hash that OpenCode uses for session storage.
+    Look up the projectID that OpenCode uses for session storage.
 
-    OpenCode stores sessions in ~/.local/share/opencode/storage/session/<hash>/
-    The hash is derived from the working directory path.
+    OpenCode stores sessions in ~/.local/share/opencode/storage/session/<projectID>/
+    The projectID is NOT computed from the path - it's stored in project config files
+    at ~/.local/share/opencode/storage/project/<projectID>.json
+
+    Returns None if no project found for the given working directory.
     """
-    # OpenCode uses SHA1 of the absolute path
-    abs_path = Path(working_directory).resolve()
-    return hashlib.sha1(str(abs_path).encode()).hexdigest()
+    project_dir = Path.home() / ".local" / "share" / "opencode" / "storage" / "project"
+    if not project_dir.exists():
+        return None
+
+    abs_path = os.path.abspath(working_directory)
+
+    # Scan project files to find one matching our working directory
+    try:
+        for project_file in project_dir.glob("*.json"):
+            if project_file.name == "global.json":
+                continue  # Skip global project
+            try:
+                with open(project_file) as f:
+                    project_data = json.load(f)
+                    if project_data.get("worktree") == abs_path:
+                        return project_data.get("id")
+            except (json.JSONDecodeError, OSError):
+                continue
+    except OSError:
+        return None
+
+    return None
 
 
-def get_latest_opencode_session(
+async def get_latest_opencode_session(
     working_directory: str | None = None,
     since_mtime: float | None = None,
     max_retries: int = 3,
@@ -49,20 +72,21 @@ def get_latest_opencode_session(
     if not opencode_dir.exists():
         return None
 
+    # Require working_directory for project-scoped session discovery
+    # Without it, we could accidentally resume a session from a different project
+    if not working_directory:
+        return None
+
+    # Look up the projectID from OpenCode's config files
+    project_id = _get_opencode_project_id(working_directory)
+    if not project_id:
+        return None  # Project not found in OpenCode's registry
+
     for attempt in range(max_retries):
         latest_file: Path | None = None
         latest_mtime: float = 0
 
-        # If working_directory is specified, only check that project's hash
-        if working_directory:
-            project_hash = _get_opencode_project_hash(working_directory)
-            project_dirs = [opencode_dir / project_hash]
-        else:
-            # Fallback: check all project directories (less safe)
-            try:
-                project_dirs = [d for d in opencode_dir.iterdir() if d.is_dir()]
-            except OSError:
-                return None
+        project_dirs = [opencode_dir / project_id]
 
         for project_dir in project_dirs:
             if not project_dir.exists():
@@ -87,8 +111,9 @@ def get_latest_opencode_session(
             return latest_file.stem
 
         # Retry with delay if no session found
+        # Uses asyncio.sleep to avoid blocking the event loop
         if attempt < max_retries - 1:
-            time.sleep(retry_delay)
+            await asyncio.sleep(retry_delay)
 
     return None
 
@@ -136,6 +161,7 @@ class OpenCodeRunner(AgentRunner):
 
         # Use -- to signal end of options, preventing prompt-as-flag injection
         # This ensures prompts starting with - aren't parsed as CLI flags
+        # Note: OpenCode doesn't support stdin input, so we must use positional args
         full_command.append("--")
         full_command.append(prompt)
 
@@ -181,6 +207,7 @@ class OpenCodeRunner(AgentRunner):
             full_command.extend(["--session", session_ref])
 
         # Use -- to signal end of options, preventing prompt-as-flag injection
+        # Note: OpenCode doesn't support stdin input, so we must use positional args
         full_command.append("--")
         full_command.append(prompt)
 
@@ -196,7 +223,7 @@ class OpenCodeRunner(AgentRunner):
     def get_output_cleaner(self) -> Callable[[str, str], str]:
         return clean_opencode_output
 
-    def parse_session_id(
+    async def parse_session_id(
         self,
         output: str,
         since_mtime: float | None = None,
@@ -213,7 +240,7 @@ class OpenCodeRunner(AgentRunner):
             since_mtime: Only consider sessions created after this timestamp
             working_directory: Project directory to scope session search
         """
-        return get_latest_opencode_session(
+        return await get_latest_opencode_session(
             working_directory=working_directory,
             since_mtime=since_mtime,
         )

@@ -24,17 +24,6 @@ class GeminiConfig:
 
 
 @dataclass(frozen=True)
-class AiderConfig:
-    """Configuration for Aider CLI integration."""
-    model: str | None = None  # Use aider's default if not specified
-    dry_run: bool = True      # Read-only mode - don't modify files
-    yes_always: bool = True   # Auto-accept changes in non-interactive mode
-    no_git: bool = False      # Disable git operations
-    auto_commits: bool = False  # Disable auto-commits (let user control git)
-    clean_output: bool = True
-
-
-@dataclass(frozen=True)
 class OpenCodeConfig:
     """Configuration for OpenCode CLI integration."""
     model: str | None = None  # Model as provider/model (e.g., anthropic/claude-sonnet-4)
@@ -54,7 +43,6 @@ class OwlexConfig:
     """Main configuration container."""
     codex: CodexConfig
     gemini: GeminiConfig
-    aider: AiderConfig
     opencode: OpenCodeConfig
     council: CouncilConfig
     default_timeout: int = 300
@@ -85,15 +73,6 @@ def load_config() -> OwlexConfig:
         clean_output=os.environ.get("GEMINI_CLEAN_OUTPUT", "true").lower() == "true",
     )
 
-    aider = AiderConfig(
-        model=os.environ.get("AIDER_MODEL") or None,
-        dry_run=os.environ.get("AIDER_DRY_RUN", "true").lower() == "true",
-        yes_always=os.environ.get("AIDER_YES_ALWAYS", "true").lower() == "true",
-        no_git=os.environ.get("AIDER_NO_GIT", "false").lower() == "true",
-        auto_commits=os.environ.get("AIDER_AUTO_COMMITS", "false").lower() == "true",
-        clean_output=os.environ.get("AIDER_CLEAN_OUTPUT", "true").lower() == "true",
-    )
-
     opencode = OpenCodeConfig(
         model=os.environ.get("OPENCODE_MODEL") or None,
         agent=os.environ.get("OPENCODE_AGENT", "plan"),  # Default to read-only plan agent
@@ -122,7 +101,6 @@ def load_config() -> OwlexConfig:
     return OwlexConfig(
         codex=codex,
         gemini=gemini,
-        aider=aider,
         opencode=opencode,
         council=council,
         default_timeout=timeout,

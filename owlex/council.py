@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from .config import config
-from .engine import engine, build_agent_response, aider_runner, codex_runner, gemini_runner, opencode_runner
+from .engine import engine, build_agent_response, codex_runner, gemini_runner, opencode_runner
 from .prompts import build_deliberation_prompt
 from .models import (
     Agent,
@@ -28,7 +28,7 @@ def _log(msg: str):
 
 class Council:
     """
-    Orchestrates multi-agent deliberation between Aider, Codex, and Gemini.
+    Orchestrates multi-agent deliberation between Codex, Gemini, and OpenCode.
 
     The council process:
     1. Round 1: All agents answer the question in parallel
@@ -80,7 +80,6 @@ class Council:
             timeout = config.default_timeout
 
         # Default to CWD if no working_directory provided
-        # This ensures Aider's history file persists between R1 and R2
         if working_directory is None:
             working_directory = os.getcwd()
 
@@ -92,7 +91,7 @@ class Council:
 
         # Determine which agents to run
         excluded = config.council.exclude_agents
-        agents = [a for a in ["aider", "codex", "gemini", "opencode"] if a not in excluded]
+        agents = [a for a in ["codex", "gemini", "opencode"] if a not in excluded]
         self.log(f"Round 1: querying {', '.join(a.title() for a in agents)}...")
 
         round_1 = await self._run_round_1(prompt, working_directory, timeout)
@@ -150,26 +149,6 @@ class Council:
 
         # Create tasks for non-excluded agents
         # All R1 agents use exec mode (clean start) per Option A
-        if "aider" not in excluded:
-            aider_task = self._engine.create_task(
-                command=f"council_{Agent.AIDER.value}",
-                args={"prompt": prompt, "working_directory": working_directory},
-                context=self.context,
-            )
-            tasks["aider"] = aider_task
-
-            async def run_aider():
-                await self._engine.run_agent(
-                    aider_task, aider_runner, mode="exec",
-                    prompt=prompt, working_directory=working_directory
-                )
-                elapsed = (datetime.now() - round1_start).total_seconds()
-                status = "completed" if aider_task.status == "completed" else "failed"
-                self.log(f"Aider {status} ({elapsed:.1f}s)")
-
-            aider_task.async_task = asyncio.create_task(run_aider())
-            async_tasks.append(aider_task.async_task)
-
         if "codex" not in excluded:
             codex_task = self._engine.create_task(
                 command=f"council_{Agent.CODEX.value}",
@@ -255,15 +234,17 @@ class Council:
 
         # Capture session IDs from completed R1 agents for R2 resume
         # Pass since_mtime (R1 start) and working_directory to scope session discovery
-        r1_start_mtime = round1_start.timestamp()
+        # Subtract 1 second to handle filesystem mtime granularity (some filesystems
+        # only store whole seconds, so a session created at 100.9s might have mtime 100)
+        r1_start_mtime = round1_start.timestamp() - 1.0
 
-        # Parse session IDs with validation
+        # Parse session IDs with validation (async to avoid blocking event loop)
         codex_session = None
         gemini_session = None
         opencode_session = None
 
         if "codex" in tasks and tasks["codex"].status == "completed":
-            codex_session = codex_runner.parse_session_id(
+            codex_session = await codex_runner.parse_session_id(
                 "", since_mtime=r1_start_mtime, working_directory=working_directory
             )
             if codex_session and not codex_runner.validate_session_id(codex_session):
@@ -273,7 +254,7 @@ class Council:
                 self.log("Codex session ID not found, R2 will use exec mode")
 
         if "gemini" in tasks and tasks["gemini"].status == "completed":
-            gemini_session = gemini_runner.parse_session_id(
+            gemini_session = await gemini_runner.parse_session_id(
                 "", since_mtime=r1_start_mtime, working_directory=working_directory
             )
             if gemini_session and not gemini_runner.validate_session_id(gemini_session):
@@ -283,7 +264,7 @@ class Council:
                 self.log("Gemini session ID not found, R2 will use exec mode")
 
         if "opencode" in tasks and tasks["opencode"].status == "completed":
-            opencode_session = opencode_runner.parse_session_id(
+            opencode_session = await opencode_runner.parse_session_id(
                 "", since_mtime=r1_start_mtime, working_directory=working_directory
             )
             if opencode_session and not opencode_runner.validate_session_id(opencode_session):
@@ -293,7 +274,6 @@ class Council:
                 self.log("OpenCode session ID not found, R2 will use exec mode")
 
         return CouncilRound(
-            aider=build_agent_response(tasks["aider"], Agent.AIDER) if "aider" in tasks else None,
             codex=build_agent_response(tasks["codex"], Agent.CODEX, session_id=codex_session) if "codex" in tasks else None,
             gemini=build_agent_response(tasks["gemini"], Agent.GEMINI, session_id=gemini_session) if "gemini" in tasks else None,
             opencode=build_agent_response(tasks["opencode"], Agent.OPENCODE, session_id=opencode_session) if "opencode" in tasks else None,
@@ -322,7 +302,6 @@ class Council:
         gemini_session = round_1.gemini.session_id if round_1.gemini else None
         opencode_session = round_1.opencode.session_id if round_1.opencode else None
 
-        aider_content = (round_1.aider.content or round_1.aider.error or "(no response)") if round_1.aider else None
         codex_content = (round_1.codex.content or round_1.codex.error or "(no response)") if round_1.codex else None
         gemini_content = (round_1.gemini.content or round_1.gemini.error or "(no response)") if round_1.gemini else None
         opencode_content = (round_1.opencode.content or round_1.opencode.error or "(no response)") if round_1.opencode else None
@@ -330,7 +309,6 @@ class Council:
 
         deliberation_prompt = build_deliberation_prompt(
             original_prompt=prompt,
-            aider_answer=aider_content,
             codex_answer=codex_content,
             gemini_answer=gemini_content,
             opencode_answer=opencode_content,
@@ -343,32 +321,11 @@ class Council:
         async_tasks = []
 
         # R2 resumes from R1 sessions using explicit session IDs (Option A)
-        # Aider: uses exec (context preserved via .aider.chat.history.md file)
         # Codex: uses resume with explicit session ID from R1
         # Gemini: uses resume with explicit session index from R1
         # OpenCode: uses resume with explicit session ID from R1
         #
         # If session ID is None (R1 failed or parsing failed), fall back to exec mode
-
-        if "aider" not in excluded:
-            aider_delib_task = self._engine.create_task(
-                command=f"council_{Agent.AIDER.value}_delib",
-                args={"prompt": deliberation_prompt, "working_directory": working_directory},
-                context=self.context,
-            )
-            tasks["aider"] = aider_delib_task
-
-            async def run_aider_delib():
-                # Aider preserves context via history file - use exec mode
-                await self._engine.run_agent(
-                    aider_delib_task, aider_runner, mode="exec",
-                    prompt=deliberation_prompt, working_directory=working_directory
-                )
-                elapsed = (datetime.now() - round2_start).total_seconds()
-                self.log(f"Aider revised ({elapsed:.1f}s)")
-
-            aider_delib_task.async_task = asyncio.create_task(run_aider_delib())
-            async_tasks.append(aider_delib_task.async_task)
 
         if "codex" not in excluded:
             codex_delib_task = self._engine.create_task(
@@ -483,7 +440,6 @@ class Council:
         self.log(f"Round 2 complete ({round2_elapsed:.1f}s)")
 
         return CouncilRound(
-            aider=build_agent_response(tasks["aider"], Agent.AIDER) if "aider" in tasks else None,
             codex=build_agent_response(tasks["codex"], Agent.CODEX) if "codex" in tasks else None,
             gemini=build_agent_response(tasks["gemini"], Agent.GEMINI) if "gemini" in tasks else None,
             opencode=build_agent_response(tasks["opencode"], Agent.OPENCODE) if "opencode" in tasks else None,

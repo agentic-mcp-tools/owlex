@@ -59,7 +59,7 @@ class AgentRunner(ABC):
         """Return the output cleaning function for this agent."""
         pass
 
-    def parse_session_id(
+    async def parse_session_id(
         self,
         output: str,
         since_mtime: float | None = None,
@@ -70,6 +70,8 @@ class AgentRunner(ABC):
 
         Override in subclasses to extract session IDs from CLI output or filesystem.
         Returns None if no session ID found (will trigger fallback to exec mode).
+
+        This method is async to allow non-blocking retries with asyncio.sleep().
 
         Args:
             output: The agent's stdout/stderr output

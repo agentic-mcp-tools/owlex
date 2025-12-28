@@ -32,7 +32,6 @@ class ErrorCode(str, Enum):
 
 class Agent(str, Enum):
     """Available AI agents."""
-    AIDER = "aider"
     CODEX = "codex"
     GEMINI = "gemini"
     OPENCODE = "opencode"
@@ -99,7 +98,6 @@ class ClaudeOpinion(BaseModel):
 
 class CouncilRound(BaseModel):
     """A single round of council deliberation."""
-    aider: AgentResponse | None = None
     codex: AgentResponse | None = None
     gemini: AgentResponse | None = None
     opencode: AgentResponse | None = None

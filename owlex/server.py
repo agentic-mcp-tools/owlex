@@ -15,7 +15,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.session import ServerSession
 
 from .models import TaskResponse, ErrorCode, Agent
-from .engine import engine, DEFAULT_TIMEOUT, aider_runner, codex_runner, gemini_runner
+from .engine import engine, DEFAULT_TIMEOUT, codex_runner, gemini_runner
 from .council import Council
 
 
@@ -93,6 +93,14 @@ async def resume_codex_session(
     use_last = not session_id or not session_id.strip()
     session_ref = "--last" if use_last else session_id.strip()
 
+    # Validate session ID if provided (not using --last)
+    if not use_last and not codex_runner.validate_session_id(session_ref):
+        return TaskResponse(
+            success=False,
+            error=f"Invalid session_id: '{session_id}' - contains disallowed characters",
+            error_code=ErrorCode.INVALID_ARGS
+        ).model_dump_json()
+
     task = engine.create_task(
         command=f"{Agent.CODEX.value}_resume",
         args={"session_id": session_ref, "prompt": prompt.strip(), "working_directory": working_directory, "enable_search": enable_search},
@@ -162,6 +170,14 @@ async def resume_gemini_session(
     if error:
         return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump_json()
 
+    # Validate session reference (must be numeric index or "latest")
+    if not gemini_runner.validate_session_id(session_ref):
+        return TaskResponse(
+            success=False,
+            error=f"Invalid session_ref: '{session_ref}' - must be 'latest' or a numeric index",
+            error_code=ErrorCode.INVALID_ARGS
+        ).model_dump_json()
+
     task = engine.create_task(
         command=f"{Agent.GEMINI.value}_resume",
         args={"session_ref": session_ref, "prompt": prompt.strip(), "working_directory": working_directory},
@@ -178,45 +194,6 @@ async def resume_gemini_session(
         task_id=task.task_id,
         status=task.status,
         message=f"Gemini resume started (session: {session_ref}). Use wait_for_task to get result.",
-    ).model_dump_json()
-
-
-# === Aider Tools ===
-
-@mcp.tool()
-async def start_aider_session(
-    ctx: Context[ServerSession, None],
-    prompt: str = Field(description="The coding task or question to send to Aider"),
-    working_directory: str | None = Field(default=None, description="Working directory for Aider to operate in"),
-) -> str:
-    """Start an Aider session for AI pair programming.
-
-    Aider is an AI coding assistant that can edit files, understand your codebase,
-    and make changes based on natural language requests.
-    """
-    if not prompt or not prompt.strip():
-        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump_json()
-
-    working_directory, error = _validate_working_directory(working_directory)
-    if error:
-        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump_json()
-
-    task = engine.create_task(
-        command=f"{Agent.AIDER.value}_exec",
-        args={"prompt": prompt.strip(), "working_directory": working_directory},
-        context=ctx,
-    )
-
-    task.async_task = asyncio.create_task(engine.run_agent(
-        task, aider_runner, mode="exec",
-        prompt=prompt.strip(), working_directory=working_directory
-    ))
-
-    return TaskResponse(
-        success=True,
-        task_id=task.task_id,
-        status=task.status,
-        message="Aider session started. Use wait_for_task to get result.",
     ).model_dump_json()
 
 
@@ -267,11 +244,23 @@ async def get_task_result(task_id: str) -> str:
             error_code=ErrorCode.EXECUTION_FAILED,
             duration_seconds=(task.completion_time - task.start_time).total_seconds() if task.completion_time else None,
         ).model_dump_json()
-    else:
+    elif task.status == "cancelled":
         return TaskResponse(
-            success=True,
+            success=False,
             task_id=task_id,
             status=task.status,
+            error=task.error or "Task was cancelled.",
+            error_code=ErrorCode.CANCELLED,
+            duration_seconds=(task.completion_time - task.start_time).total_seconds() if task.completion_time else None,
+        ).model_dump_json()
+    else:
+        # Unknown status - should not happen but handle gracefully
+        return TaskResponse(
+            success=False,
+            task_id=task_id,
+            status=task.status,
+            error=f"Unexpected task status: {task.status}",
+            error_code=ErrorCode.INTERNAL_ERROR,
         ).model_dump_json()
 
 
@@ -319,12 +308,27 @@ async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> str:
                 error_code=ErrorCode.TIMEOUT,
             ).model_dump_json()
         except Exception as e:
+            # Bug fix: Set task.status and task.error so subsequent calls are consistent
+            task.status = "failed"
+            task.error = f"Task failed: {str(e)}"
+            task.completion_time = datetime.now()
             return TaskResponse(
                 success=False,
                 task_id=task_id,
-                error=f"Task failed: {str(e)}",
+                status=task.status,
+                error=task.error,
                 error_code=ErrorCode.INTERNAL_ERROR,
             ).model_dump_json()
+    else:
+        # Bug fix: No async_task means task may have failed before launch or is in unexpected state
+        # Return actual status instead of assuming CANCELLED
+        return TaskResponse(
+            success=False,
+            task_id=task_id,
+            status=task.status,
+            error=task.error or f"Task has no async handler (status: {task.status})",
+            error_code=ErrorCode.INTERNAL_ERROR,
+        ).model_dump_json()
 
     if task.status == "completed":
         return TaskResponse(

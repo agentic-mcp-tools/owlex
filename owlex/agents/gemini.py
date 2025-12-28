@@ -2,9 +2,10 @@
 Gemini CLI agent runner.
 """
 
+import asyncio
 import hashlib
+import os
 import re
-import time
 from pathlib import Path
 from typing import Callable
 
@@ -18,13 +19,16 @@ def _get_gemini_project_hash(working_directory: str) -> str:
 
     Gemini stores sessions in ~/.gemini/tmp/<hash>/chats/
     The hash is derived from the working directory path.
+
+    Uses os.path.abspath() instead of Path.resolve() to match CLI behavior
+    (resolve() follows symlinks which may produce different paths).
     """
     # Gemini uses SHA256 of the absolute path
-    abs_path = Path(working_directory).resolve()
-    return hashlib.sha256(str(abs_path).encode()).hexdigest()
+    abs_path = os.path.abspath(working_directory)
+    return hashlib.sha256(abs_path.encode()).hexdigest()
 
 
-def get_gemini_session_for_project(
+async def get_gemini_session_for_project(
     working_directory: str | None = None,
     since_mtime: float | None = None,
     max_retries: int = 3,
@@ -49,14 +53,15 @@ def get_gemini_session_for_project(
     if not gemini_dir.exists():
         return False
 
+    # Require working_directory for project-scoped session discovery
+    # Without it, we could accidentally resume a session from a different project
+    if not working_directory:
+        return False
+
+    project_hash = _get_gemini_project_hash(working_directory)
+
     for attempt in range(max_retries):
-        # If working_directory is specified, only check that project's hash
-        if working_directory:
-            project_hash = _get_gemini_project_hash(working_directory)
-            project_dirs = [gemini_dir / project_hash]
-        else:
-            # Fallback: check all project directories (less safe)
-            project_dirs = [d for d in gemini_dir.iterdir() if d.is_dir()]
+        project_dirs = [gemini_dir / project_hash]
 
         for project_dir in project_dirs:
             if not project_dir.exists():
@@ -77,8 +82,9 @@ def get_gemini_session_for_project(
                 continue
 
         # Retry with delay if no session found
+        # Uses asyncio.sleep to avoid blocking the event loop
         if attempt < max_retries - 1:
-            time.sleep(retry_delay)
+            await asyncio.sleep(retry_delay)
 
     return False
 
@@ -166,7 +172,7 @@ class GeminiRunner(AgentRunner):
     def get_output_cleaner(self) -> Callable[[str, str], str]:
         return clean_gemini_output
 
-    def parse_session_id(
+    async def parse_session_id(
         self,
         output: str,
         since_mtime: float | None = None,
@@ -175,9 +181,13 @@ class GeminiRunner(AgentRunner):
         """
         Get session ID for Gemini.
 
-        Gemini CLI uses index numbers for resume (--resume 1), not UUIDs.
+        Gemini CLI uses index numbers for resume (-r 1), not UUIDs.
         We return "1" (most recent by index) only if we verify that a session
         was actually created for this project since since_mtime.
+
+        Note: Gemini's -r flag uses 1-indexed session ordering where 1 is most recent.
+        The ordering is chronological within the project's session directory.
+        We verify a session exists for the current project hash before returning "1".
 
         Args:
             output: Ignored (Gemini doesn't output session IDs)
@@ -185,15 +195,15 @@ class GeminiRunner(AgentRunner):
             working_directory: Project directory to scope session search
 
         Returns:
-            "1" if a valid session exists, None otherwise
+            "1" if a valid session exists for this project, None otherwise
         """
         # Check if a session was created for this project
-        if get_gemini_session_for_project(
+        if await get_gemini_session_for_project(
             working_directory=working_directory,
             since_mtime=since_mtime,
         ):
             # Return "1" as the session index - it refers to the most recent session
-            # This is project-scoped by the Gemini CLI
+            # This is project-scoped by Gemini CLI via the directory hash
             return "1"
         return None
 
@@ -201,13 +211,14 @@ class GeminiRunner(AgentRunner):
         """
         Validate a Gemini session ID.
 
-        Gemini uses numeric indices or "latest" for session references.
+        Gemini uses numeric indices (1-indexed) or "latest" for session references.
+        Index 0 is invalid as Gemini uses 1-based indexing.
         """
         if not session_id:
             return False
-        # Accept numeric indices
+        # Accept numeric indices >= 1 (Gemini uses 1-indexed sessions)
         if session_id.isdigit():
-            return True
+            return int(session_id) >= 1
         # Accept "latest"
         if session_id == "latest":
             return True
