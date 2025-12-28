@@ -5,46 +5,28 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
 
-MCP server for running Codex CLI and Gemini CLI sessions from Claude Code while maintaining context.
+MCP server for multi-agent orchestration. Run Codex, Gemini, and OpenCode from Claude Code.
 
 ## Features
 
-- **Multi-AI delegation** - Invoke Codex CLI or Gemini CLI from Claude Code
-- **Fresh or resumed sessions** - Start a new session with fresh context, or resume from the last session with full conversation history preserved
-- **Async task execution** - Tasks run in the background; wait for completion with `wait_for_task` or continue working and check results later with `get_task_result`
-- **Working directory support** - Point Codex/Gemini to any project directory
-- **Web search** - Enable Codex web search for up-to-date information
-
-## When to Use Each Provider
-
-| Task Type | Recommended | Reason |
-|-----------|-------------|--------|
-| Large codebase analysis | Gemini | 1M token context window |
-| Code review & bug finding | Codex | Purpose-built for finding critical flaws |
-| Complex multi-step implementation | Claude (caller) | Best agentic coding (SWE-bench) |
-| PRD & requirements | Codex | Excellent Socratic questioning |
-| Multimodal tasks (images, video) | Gemini | State-of-the-art multimodal reasoning |
-
-**Tip:** Configure your preferred models in your Claude Code config (`CLAUDE.md`) for project-specific recommendations.
+- **Council deliberation** - Query all agents in parallel, with optional revision round
+- **Session management** - Start fresh or resume with full context preserved
+- **Async execution** - Tasks run in background with timeout control
+- **Critique mode** - Agents find bugs and flaws in each other's answers
 
 ## Installation
 
 ```bash
-uv tool install /path/to/owlex
+uv tool install git+https://github.com/agentic-mcp-tools/owlex.git
 ```
 
-## Configuration
-
-Add to your `.mcp.json`:
+Add to `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "owlex": {
-      "command": "owlex-server",
-      "env": {
-        "CODEX_CLEAN_OUTPUT": "true"
-      }
+      "command": "owlex-server"
     }
   }
 }
@@ -52,112 +34,54 @@ Add to your `.mcp.json`:
 
 ## Tools
 
-### Codex CLI Tools
+### `council_ask`
 
-#### `start_codex_session`
+Query all agents and collect answers with optional deliberation.
 
-Start a new Codex session (no prior context).
+```
+prompt           - Question to send (required)
+claude_opinion   - Your opinion to share with agents
+deliberate       - Enable revision round (default: true)
+critique         - Agents critique instead of revise (default: false)
+timeout          - Timeout per agent in seconds (default: 300)
+```
 
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `prompt` | Yes | Question or request to send |
-| `working_directory` | No | Working directory for Codex |
-| `enable_search` | No | Enable web search |
+Returns `round_1` with initial answers, `round_2` with revisions (if enabled).
 
-#### `resume_codex_session`
+### Agent Sessions
 
-Resume an existing Codex session to ask for advice.
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `prompt` | Yes | Question or request to send |
-| `session_id` | No | Session ID to resume (uses `--last` if omitted) |
-| `working_directory` | No | Working directory for Codex |
-| `enable_search` | No | Enable web search |
-
-### Gemini CLI Tools
-
-#### `start_gemini_session`
-
-Start a new Gemini CLI session (no prior context).
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `prompt` | Yes | Question or request to send |
-| `working_directory` | No | Working directory for Gemini context |
-
-#### `resume_gemini_session`
-
-Resume an existing Gemini CLI session with full conversation history.
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `prompt` | Yes | Question or request to send |
-| `session_ref` | No | Session to resume: `latest` (default) or index number |
-| `working_directory` | No | Working directory for Gemini context |
+| Tool | Description |
+|------|-------------|
+| `start_codex_session` | New Codex session |
+| `resume_codex_session` | Resume with session ID or `--last` |
+| `start_gemini_session` | New Gemini session |
+| `resume_gemini_session` | Resume with index or `latest` |
 
 ### Task Management
 
-#### `wait_for_task`
-
-Wait for a task (Codex or Gemini) to complete and return its result.
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `task_id` | Yes | Task ID returned by session tools |
-| `timeout` | No | Maximum seconds to wait (default: 300) |
-
-#### `get_task_result`
-
-Get the result of a task (Codex or Gemini) without blocking.
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `task_id` | Yes | Task ID returned by session tools |
-
-#### `list_tasks`
-
-List all tracked tasks with their current status.
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `status_filter` | No | Filter by status: pending, running, completed, failed, cancelled |
-| `limit` | No | Maximum number of tasks to return (default: 20) |
-
-#### `cancel_task`
-
-Cancel a running task and kill its subprocess.
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `task_id` | Yes | Task ID to cancel |
-
-### Council Tool
-
-#### `council_ask`
-
-Ask the council (Codex + Gemini) a question and collect their answers. Runs both agents in parallel, optionally with a deliberation round where each agent can revise their answer after seeing all perspectives.
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `prompt` | Yes | Question or task to send to the council |
-| `claude_opinion` | No | Claude's initial opinion to share with the council |
-| `working_directory` | No | Working directory for context |
-| `deliberate` | No | If true, share answers for a second round (default: true) |
-| `timeout` | No | Timeout per agent in seconds (default: 300) |
-
-**Response includes:**
-- `claude_opinion`: Claude's opinion if provided
-- `round_1`: Initial answers from Codex and Gemini
-- `round_2`: Revised answers after deliberation (if enabled)
-- `metadata.log`: Progress timeline (e.g., "Codex completed (3.2s)")
+| Tool | Description |
+|------|-------------|
+| `wait_for_task` | Block until task completes |
+| `get_task_result` | Check result without blocking |
+| `list_tasks` | List tasks with status filter |
+| `cancel_task` | Kill running task |
 
 ## Environment Variables
 
-### Codex Settings
-- `CODEX_CLEAN_OUTPUT`: Remove echoed prompts from output (default: `true`)
-- `CODEX_BYPASS_APPROVALS`: Bypass sandbox mode (default: `false`)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CODEX_BYPASS_APPROVALS` | `false` | Bypass sandbox (dangerous) |
+| `CODEX_ENABLE_SEARCH` | `true` | Enable web search |
+| `GEMINI_YOLO_MODE` | `false` | Auto-approve actions |
+| `OPENCODE_AGENT` | `plan` | Agent: `plan` (read-only) or `build` |
+| `COUNCIL_EXCLUDE_AGENTS` | `` | Comma-separated agents to exclude |
+| `OWLEX_DEFAULT_TIMEOUT` | `300` | Default timeout in seconds |
 
-### Gemini Settings
-- `GEMINI_YOLO_MODE`: Auto-approve actions via `--approval-mode yolo` (default: `false` - read-only mode)
-- `GEMINI_CLEAN_OUTPUT`: Remove noise from output (default: `true`)
+## When to Use Each Agent
+
+| Agent | Best For |
+|-------|----------|
+| **Codex** | Code review, bug finding, PRD discussion |
+| **Gemini** | Large codebase (1M context), multimodal |
+| **OpenCode** | Alternative perspective, plan mode |
+| **Claude** | Complex multi-step implementation |
