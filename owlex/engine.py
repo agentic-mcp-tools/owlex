@@ -12,7 +12,7 @@ from typing import Any
 
 from .config import config
 from .models import Task, TaskStatus, AgentResponse, Agent
-from .agents import AiderRunner, CodexRunner, GeminiRunner
+from .agents import AiderRunner, CodexRunner, GeminiRunner, OpenCodeRunner
 from .agents.base import AgentRunner, AgentCommand
 
 
@@ -34,6 +34,7 @@ def build_agent_response(task: Task, agent: Agent | str) -> AgentResponse:
         Agent.AIDER.value: "Aider Output:\n\n",
         Agent.CODEX.value: "Codex Output:\n\n",
         Agent.GEMINI.value: "Gemini Output:\n\n",
+        Agent.OPENCODE.value: "OpenCode Output:\n\n",
     }
     prefix = prefix_map.get(agent_name, "")
 
@@ -57,12 +58,14 @@ NotifyCallback = Callable[[str, str], Any] | None
 aider_runner = AiderRunner()
 codex_runner = CodexRunner()
 gemini_runner = GeminiRunner()
+opencode_runner = OpenCodeRunner()
 
 # Map Agent enum to runner instances
 AGENT_RUNNERS: dict[Agent, AgentRunner] = {
     Agent.AIDER: aider_runner,
     Agent.CODEX: codex_runner,
     Agent.GEMINI: gemini_runner,
+    Agent.OPENCODE: opencode_runner,
 }
 
 

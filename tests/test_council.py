@@ -51,7 +51,7 @@ class TestCouncilRound1:
     """Tests for round 1 parallel execution."""
 
     async def test_runs_all_agents_in_parallel(self, mock_engine, mock_config):
-        """Should run Aider, Codex, and Gemini in parallel."""
+        """Should run Aider, Codex, Gemini, and OpenCode in parallel."""
         call_order = []
 
         async def mock_run_agent(task, runner, mode="exec", **kwargs):
@@ -72,14 +72,16 @@ class TestCouncilRound1:
             timeout=10,
         )
 
-        # All three should start before any ends (parallel execution)
-        assert "aider_start" in call_order[:3]
-        assert "codex_start" in call_order[:3]
-        assert "gemini_start" in call_order[:3]
+        # All four should start before any ends (parallel execution)
+        assert "aider_start" in call_order[:4]
+        assert "codex_start" in call_order[:4]
+        assert "gemini_start" in call_order[:4]
+        assert "opencode_start" in call_order[:4]
         assert response.round_1 is not None
         assert response.round_1.aider.status == "completed"
         assert response.round_1.codex.status == "completed"
         assert response.round_1.gemini.status == "completed"
+        assert response.round_1.opencode.status == "completed"
 
     async def test_handles_timeout(self, mock_engine, mock_config):
         """Should handle agent timeout gracefully."""

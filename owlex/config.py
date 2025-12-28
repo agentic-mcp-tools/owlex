@@ -35,6 +35,15 @@ class AiderConfig:
 
 
 @dataclass(frozen=True)
+class OpenCodeConfig:
+    """Configuration for OpenCode CLI integration."""
+    model: str | None = None  # Model as provider/model (e.g., anthropic/claude-sonnet-4)
+    agent: str = "plan"  # Agent to use - "plan" (read-only) or "build" (full access)
+    json_output: bool = False  # Output in JSON format
+    clean_output: bool = True
+
+
+@dataclass(frozen=True)
 class CouncilConfig:
     """Configuration for council orchestration."""
     exclude_agents: frozenset[str] = frozenset()  # Agents to exclude from council
@@ -46,6 +55,7 @@ class OwlexConfig:
     codex: CodexConfig
     gemini: GeminiConfig
     aider: AiderConfig
+    opencode: OpenCodeConfig
     council: CouncilConfig
     default_timeout: int = 300
 
@@ -84,6 +94,13 @@ def load_config() -> OwlexConfig:
         clean_output=os.environ.get("AIDER_CLEAN_OUTPUT", "true").lower() == "true",
     )
 
+    opencode = OpenCodeConfig(
+        model=os.environ.get("OPENCODE_MODEL") or None,
+        agent=os.environ.get("OPENCODE_AGENT", "plan"),  # Default to read-only plan agent
+        json_output=os.environ.get("OPENCODE_JSON_OUTPUT", "false").lower() == "true",
+        clean_output=os.environ.get("OPENCODE_CLEAN_OUTPUT", "true").lower() == "true",
+    )
+
     # Parse council exclude agents (comma-separated list)
     exclude_raw = os.environ.get("COUNCIL_EXCLUDE_AGENTS", "")
     exclude_agents = frozenset(
@@ -106,6 +123,7 @@ def load_config() -> OwlexConfig:
         codex=codex,
         gemini=gemini,
         aider=aider,
+        opencode=opencode,
         council=council,
         default_timeout=timeout,
     )

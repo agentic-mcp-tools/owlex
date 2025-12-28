@@ -35,6 +35,7 @@ class Agent(str, Enum):
     AIDER = "aider"
     CODEX = "codex"
     GEMINI = "gemini"
+    OPENCODE = "opencode"
 
 
 @dataclass
@@ -100,6 +101,7 @@ class CouncilRound(BaseModel):
     aider: AgentResponse | None = None
     codex: AgentResponse | None = None
     gemini: AgentResponse | None = None
+    opencode: AgentResponse | None = None
 
 
 class CouncilMetadata(BaseModel):

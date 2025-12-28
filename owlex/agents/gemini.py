@@ -48,13 +48,12 @@ class GeminiRunner(AgentRunner):
         if working_directory:
             full_command.extend(["--include-directories", working_directory])
 
-        # Gemini CLI uses positional prompt - just append it directly
-        # Note: -- separator causes Gemini to wait for stdin, so we don't use it
-        full_command.append(prompt)
-
+        # Pass prompt via stdin to prevent prompt-as-flag injection
+        # Gemini reads from stdin when no positional prompt is provided
+        # This ensures prompts starting with - aren't parsed as CLI flags
         return AgentCommand(
             command=full_command,
-            prompt="",  # Empty because prompt is in command
+            prompt=prompt,  # Prompt passed via stdin
             cwd=working_directory,
             output_prefix="Gemini Output",
             not_found_hint="Please ensure Gemini CLI is installed (npm install -g @google/gemini-cli).",
@@ -79,12 +78,11 @@ class GeminiRunner(AgentRunner):
             full_command.extend(["--include-directories", working_directory])
 
         full_command.extend(["-r", session_ref])
-        # Gemini CLI uses positional prompt - just append it directly
-        full_command.append(prompt)
 
+        # Pass prompt via stdin to prevent prompt-as-flag injection
         return AgentCommand(
             command=full_command,
-            prompt="",  # Empty because prompt is in command
+            prompt=prompt,  # Prompt passed via stdin
             cwd=working_directory,
             output_prefix="Gemini Resume Output",
             not_found_hint="Please ensure Gemini CLI is installed (npm install -g @google/gemini-cli).",

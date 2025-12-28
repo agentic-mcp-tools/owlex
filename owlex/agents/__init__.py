@@ -7,5 +7,6 @@ from .base import AgentRunner
 from .aider import AiderRunner
 from .codex import CodexRunner
 from .gemini import GeminiRunner
+from .opencode import OpenCodeRunner
 
-__all__ = ["AgentRunner", "AiderRunner", "CodexRunner", "GeminiRunner"]
+__all__ = ["AgentRunner", "AiderRunner", "CodexRunner", "GeminiRunner", "OpenCodeRunner"]

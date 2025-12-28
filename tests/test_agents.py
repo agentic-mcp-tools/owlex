@@ -8,6 +8,7 @@ import pytest
 from owlex.agents.aider import AiderRunner
 from owlex.agents.codex import CodexRunner
 from owlex.agents.gemini import GeminiRunner
+from owlex.agents.opencode import OpenCodeRunner
 
 
 class TestCodexRunner:
@@ -187,8 +188,8 @@ class TestGeminiRunner:
             cmd = runner.build_exec_command(prompt="Hello")
 
             assert cmd.command[0] == "gemini"
-            assert "Hello" in cmd.command  # Prompt is CLI arg, not stdin
-            assert cmd.prompt == ""  # Empty because prompt is in command
+            assert "Hello" not in cmd.command  # Prompt is via stdin, not CLI arg
+            assert cmd.prompt == "Hello"  # Prompt passed via stdin
             assert cmd.output_prefix == "Gemini Output"
             assert cmd.stream is True
 
@@ -239,7 +240,7 @@ class TestGeminiRunner:
 
             assert "-r" in cmd.command
             assert "latest" in cmd.command
-            assert "Continue" in cmd.command
+            assert cmd.prompt == "Continue"  # Prompt passed via stdin
             assert cmd.stream is False  # Resume uses non-streaming
 
     def test_resume_with_yolo(self, runner):
@@ -280,20 +281,18 @@ class TestGeminiRunner:
             assert "--enable" not in cmd.command
 
     def test_exec_handles_dash_prompt(self, runner):
-        """Should handle prompts starting with dash (no -- separator needed for Gemini)."""
+        """Should use stdin to prevent prompts being parsed as flags."""
         with patch("owlex.agents.gemini.config") as mock_config:
             mock_config.gemini.yolo_mode = False
 
             cmd = runner.build_exec_command(prompt="-malicious prompt")
 
-            # Gemini doesn't use -- separator (causes stdin wait mode)
-            # The prompt is passed as positional argument directly
-            assert "-malicious prompt" in cmd.command
-            # -- should NOT be in the command (it causes Gemini to wait for stdin)
-            assert "--" not in cmd.command
+            # Prompt should be passed via stdin, not in command
+            assert "-malicious prompt" not in cmd.command
+            assert cmd.prompt == "-malicious prompt"
 
     def test_resume_handles_dash_prompt(self, runner):
-        """Resume should handle prompts starting with dash."""
+        """Resume should use stdin to prevent prompts being parsed as flags."""
         with patch("owlex.agents.gemini.config") as mock_config:
             mock_config.gemini.yolo_mode = False
 
@@ -302,8 +301,9 @@ class TestGeminiRunner:
                 prompt="--dangerous"
             )
 
-            # Prompt is passed directly, no -- separator
-            assert "--dangerous" in cmd.command
+            # Prompt should be passed via stdin, not in command
+            assert "--dangerous" not in cmd.command
+            assert cmd.prompt == "--dangerous"
 
 
 class TestAiderRunner:
@@ -448,6 +448,173 @@ class TestAiderRunner:
             assert "aider-chat" in cmd.not_found_hint
 
 
+class TestOpenCodeRunner:
+    """Tests for OpenCode CLI command construction."""
+
+    @pytest.fixture
+    def runner(self):
+        return OpenCodeRunner()
+
+    def test_exec_basic_command(self, runner):
+        """Should build basic exec command."""
+        with patch("owlex.agents.opencode.config") as mock_config:
+            mock_config.opencode.model = None
+            mock_config.opencode.agent = None
+            mock_config.opencode.json_output = False
+
+            cmd = runner.build_exec_command(prompt="Fix the bug")
+
+            assert cmd.command[0] == "opencode"
+            assert cmd.command[1] == "run"
+            assert "Fix the bug" in cmd.command
+            assert cmd.prompt == ""  # Prompt is in command
+            assert cmd.output_prefix == "OpenCode Output"
+            assert cmd.stream is True
+
+    def test_exec_with_working_directory(self, runner):
+        """Should set cwd for working directory."""
+        with patch("owlex.agents.opencode.config") as mock_config:
+            mock_config.opencode.model = None
+            mock_config.opencode.agent = None
+            mock_config.opencode.json_output = False
+
+            cmd = runner.build_exec_command(
+                prompt="Hello",
+                working_directory="/path/to/dir"
+            )
+
+            assert cmd.cwd == "/path/to/dir"
+
+    def test_exec_with_model(self, runner):
+        """Should add model flag when configured."""
+        with patch("owlex.agents.opencode.config") as mock_config:
+            mock_config.opencode.model = "anthropic/claude-sonnet-4"
+            mock_config.opencode.agent = None
+            mock_config.opencode.json_output = False
+
+            cmd = runner.build_exec_command(prompt="Hello")
+
+            assert "--model" in cmd.command
+            idx = cmd.command.index("--model")
+            assert cmd.command[idx + 1] == "anthropic/claude-sonnet-4"
+
+    def test_exec_with_agent(self, runner):
+        """Should add agent flag when configured."""
+        with patch("owlex.agents.opencode.config") as mock_config:
+            mock_config.opencode.model = None
+            mock_config.opencode.agent = "build"
+            mock_config.opencode.json_output = False
+
+            cmd = runner.build_exec_command(prompt="Hello")
+
+            assert "--agent" in cmd.command
+            idx = cmd.command.index("--agent")
+            assert cmd.command[idx + 1] == "build"
+
+    def test_exec_with_json_output(self, runner):
+        """Should add format json flag when configured."""
+        with patch("owlex.agents.opencode.config") as mock_config:
+            mock_config.opencode.model = None
+            mock_config.opencode.agent = None
+            mock_config.opencode.json_output = True
+
+            cmd = runner.build_exec_command(prompt="Hello")
+
+            assert "--format" in cmd.command
+            idx = cmd.command.index("--format")
+            assert cmd.command[idx + 1] == "json"
+
+    def test_resume_with_continue(self, runner):
+        """Should use --continue for latest session."""
+        with patch("owlex.agents.opencode.config") as mock_config:
+            mock_config.opencode.model = None
+            mock_config.opencode.agent = None
+            mock_config.opencode.json_output = False
+
+            cmd = runner.build_resume_command(
+                session_ref="--continue",
+                prompt="Continue working"
+            )
+
+            assert "--continue" in cmd.command
+            assert "Continue working" in cmd.command
+            assert cmd.stream is False  # Resume uses non-streaming
+
+    def test_resume_with_session_id(self, runner):
+        """Should use --session for specific session ID."""
+        with patch("owlex.agents.opencode.config") as mock_config:
+            mock_config.opencode.model = None
+            mock_config.opencode.agent = None
+            mock_config.opencode.json_output = False
+
+            cmd = runner.build_resume_command(
+                session_ref="abc123",
+                prompt="Continue"
+            )
+
+            assert "--session" in cmd.command
+            assert "abc123" in cmd.command
+
+    def test_resume_rejects_flag_injection(self, runner):
+        """Should reject session refs that look like flags."""
+        with patch("owlex.agents.opencode.config") as mock_config:
+            mock_config.opencode.model = None
+            mock_config.opencode.agent = None
+            mock_config.opencode.json_output = False
+
+            with pytest.raises(ValueError) as exc_info:
+                runner.build_resume_command(
+                    session_ref="--malicious",
+                    prompt="Hello"
+                )
+
+            assert "cannot start with '-'" in str(exc_info.value)
+
+    def test_not_found_hint(self, runner):
+        """Should include helpful installation hint."""
+        with patch("owlex.agents.opencode.config") as mock_config:
+            mock_config.opencode.model = None
+            mock_config.opencode.agent = None
+            mock_config.opencode.json_output = False
+
+            cmd = runner.build_exec_command(prompt="Hello")
+
+            assert "opencode.ai" in cmd.not_found_hint
+
+    def test_exec_handles_dash_prompt(self, runner):
+        """Should use -- separator to prevent prompts being parsed as flags."""
+        with patch("owlex.agents.opencode.config") as mock_config:
+            mock_config.opencode.model = None
+            mock_config.opencode.agent = None
+            mock_config.opencode.json_output = False
+
+            cmd = runner.build_exec_command(prompt="-malicious prompt")
+
+            # -- separator should be present to prevent flag injection
+            assert "--" in cmd.command
+            assert "-malicious prompt" in cmd.command
+            # Verify -- comes before the prompt
+            separator_idx = cmd.command.index("--")
+            prompt_idx = cmd.command.index("-malicious prompt")
+            assert separator_idx < prompt_idx
+
+    def test_resume_handles_dash_prompt(self, runner):
+        """Resume should use -- separator to prevent prompts being parsed as flags."""
+        with patch("owlex.agents.opencode.config") as mock_config:
+            mock_config.opencode.model = None
+            mock_config.opencode.agent = None
+            mock_config.opencode.json_output = False
+
+            cmd = runner.build_resume_command(
+                session_ref="--continue",
+                prompt="--dangerous"
+            )
+
+            # -- separator should be present to prevent flag injection
+            assert cmd.command.count("--") >= 1  # At least one -- for separator
+            assert "--dangerous" in cmd.command
+
+
 class TestAgentInterface:
     """Tests for AgentRunner interface compliance."""
 
@@ -466,6 +633,11 @@ class TestAgentInterface:
         runner = GeminiRunner()
         assert runner.name == "gemini"
 
+    def test_opencode_has_name(self):
+        """OpenCode runner should have name property."""
+        runner = OpenCodeRunner()
+        assert runner.name == "opencode"
+
     def test_aider_has_output_cleaner(self):
         """Aider runner should provide output cleaner."""
         runner = AiderRunner()
@@ -481,5 +653,11 @@ class TestAgentInterface:
     def test_gemini_has_output_cleaner(self):
         """Gemini runner should provide output cleaner."""
         runner = GeminiRunner()
+        cleaner = runner.get_output_cleaner()
+        assert callable(cleaner)
+
+    def test_opencode_has_output_cleaner(self):
+        """OpenCode runner should provide output cleaner."""
+        runner = OpenCodeRunner()
         cleaner = runner.get_output_cleaner()
         assert callable(cleaner)
