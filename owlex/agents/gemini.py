@@ -2,7 +2,9 @@
 Gemini CLI agent runner.
 """
 
+import hashlib
 import re
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -10,47 +12,75 @@ from ..config import config
 from .base import AgentRunner, AgentCommand
 
 
-def get_latest_gemini_session() -> str | None:
+def _get_gemini_project_hash(working_directory: str) -> str:
     """
-    Find the most recent Gemini session ID from filesystem.
+    Compute the project hash that Gemini uses for session storage.
+
+    Gemini stores sessions in ~/.gemini/tmp/<hash>/chats/
+    The hash is derived from the working directory path.
+    """
+    # Gemini uses SHA256 of the absolute path
+    abs_path = Path(working_directory).resolve()
+    return hashlib.sha256(str(abs_path).encode()).hexdigest()
+
+
+def get_gemini_session_for_project(
+    working_directory: str | None = None,
+    since_mtime: float | None = None,
+    max_retries: int = 3,
+    retry_delay: float = 0.3,
+) -> bool:
+    """
+    Check if a Gemini session exists for the given project.
 
     Gemini stores sessions in ~/.gemini/tmp/<hash>/chats/session-*.json
-    The short UUID is extracted from the filename.
+    We check if a session file exists that was created after since_mtime.
+
+    Args:
+        working_directory: The project directory to scope to.
+        since_mtime: Only consider sessions created after this timestamp.
+        max_retries: Number of retries if no session found.
+        retry_delay: Delay between retries in seconds.
 
     Returns:
-        Session UUID (short form) if found, None otherwise
+        True if a valid session exists, False otherwise
     """
     gemini_dir = Path.home() / ".gemini" / "tmp"
     if not gemini_dir.exists():
-        return None
+        return False
 
-    # Find the most recent session file across all project directories
-    latest_file: Path | None = None
-    latest_mtime: float = 0
+    for attempt in range(max_retries):
+        # If working_directory is specified, only check that project's hash
+        if working_directory:
+            project_hash = _get_gemini_project_hash(working_directory)
+            project_dirs = [gemini_dir / project_hash]
+        else:
+            # Fallback: check all project directories (less safe)
+            project_dirs = [d for d in gemini_dir.iterdir() if d.is_dir()]
 
-    for project_dir in gemini_dir.iterdir():
-        if not project_dir.is_dir():
-            continue
-        chats_dir = project_dir / "chats"
-        if not chats_dir.exists():
-            continue
-        for session_file in chats_dir.glob("session-*.json"):
-            mtime = session_file.stat().st_mtime
-            if mtime > latest_mtime:
-                latest_mtime = mtime
-                latest_file = session_file
+        for project_dir in project_dirs:
+            if not project_dir.exists():
+                continue
+            chats_dir = project_dir / "chats"
+            if not chats_dir.exists():
+                continue
+            try:
+                for session_file in chats_dir.glob("session-*.json"):
+                    try:
+                        mtime = session_file.stat().st_mtime
+                        # Check if session was created after since_mtime
+                        if since_mtime is None or mtime >= since_mtime:
+                            return True
+                    except OSError:
+                        continue
+            except OSError:
+                continue
 
-    if latest_file is None:
-        return None
+        # Retry with delay if no session found
+        if attempt < max_retries - 1:
+            time.sleep(retry_delay)
 
-    # Extract UUID from filename: session-YYYY-MM-DDTHH-MM-<short-uuid>.json
-    # Pattern: session-2025-12-27T16-07-f44b0544.json
-    filename = latest_file.stem  # Remove .json
-    match = re.search(r'session-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-([a-f0-9]+)$', filename)
-    if match:
-        return match.group(1)
-
-    return None
+    return False
 
 
 def clean_gemini_output(raw_output: str, original_prompt: str = "") -> str:
@@ -136,18 +166,52 @@ class GeminiRunner(AgentRunner):
     def get_output_cleaner(self) -> Callable[[str, str], str]:
         return clean_gemini_output
 
-    def parse_session_id(self, output: str) -> str | None:
+    def parse_session_id(
+        self,
+        output: str,
+        since_mtime: float | None = None,
+        working_directory: str | None = None,
+    ) -> str | None:
         """
         Get session ID for Gemini.
 
-        Gemini doesn't output session ID in stdout, so we check the filesystem
-        for the most recently created session file. Returns short UUID prefix.
+        Gemini CLI uses index numbers for resume (--resume 1), not UUIDs.
+        We return "1" (most recent by index) only if we verify that a session
+        was actually created for this project since since_mtime.
 
-        Note: Gemini CLI uses index numbers for resume (--resume 1), not UUIDs.
-        For now, we return "1" (most recent by index) since we call this right
-        after R1 completes and session 1 will be our R1 session.
+        Args:
+            output: Ignored (Gemini doesn't output session IDs)
+            since_mtime: Only consider sessions created after this timestamp
+            working_directory: Project directory to scope session search
+
+        Returns:
+            "1" if a valid session exists, None otherwise
         """
-        # Return "1" as the session index - it refers to the most recent session
-        # This is safer than "latest" because indices are project-scoped
-        # TODO: Consider parsing the full UUID and matching against --list-sessions
-        return "1"
+        # Check if a session was created for this project
+        if get_gemini_session_for_project(
+            working_directory=working_directory,
+            since_mtime=since_mtime,
+        ):
+            # Return "1" as the session index - it refers to the most recent session
+            # This is project-scoped by the Gemini CLI
+            return "1"
+        return None
+
+    def validate_session_id(self, session_id: str) -> bool:
+        """
+        Validate a Gemini session ID.
+
+        Gemini uses numeric indices or "latest" for session references.
+        """
+        if not session_id:
+            return False
+        # Accept numeric indices
+        if session_id.isdigit():
+            return True
+        # Accept "latest"
+        if session_id == "latest":
+            return True
+        # Reject anything that looks like a flag
+        if session_id.startswith("-"):
+            return False
+        return False

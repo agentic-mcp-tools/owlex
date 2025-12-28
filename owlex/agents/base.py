@@ -59,17 +59,47 @@ class AgentRunner(ABC):
         """Return the output cleaning function for this agent."""
         pass
 
-    def parse_session_id(self, output: str) -> str | None:
+    def parse_session_id(
+        self,
+        output: str,
+        since_mtime: float | None = None,
+        working_directory: str | None = None,
+    ) -> str | None:
         """
-        Parse session ID from agent's output.
+        Parse session ID from agent's output or filesystem.
 
-        Override in subclasses to extract session IDs from CLI output.
+        Override in subclasses to extract session IDs from CLI output or filesystem.
         Returns None if no session ID found (will trigger fallback to exec mode).
 
         Args:
             output: The agent's stdout/stderr output
+            since_mtime: Only consider sessions created after this timestamp.
+                        Used to scope to sessions from the current run.
+            working_directory: Working directory context to scope session discovery.
 
         Returns:
             Session ID string if found, None otherwise
         """
         return None
+
+    def validate_session_id(self, session_id: str) -> bool:
+        """
+        Validate a session ID before use in resume commands.
+
+        Checks for potential flag injection or malformed IDs.
+
+        Args:
+            session_id: The session ID to validate
+
+        Returns:
+            True if valid, False otherwise
+        """
+        if not session_id:
+            return False
+        # Reject IDs that start with dash (flag injection)
+        if session_id.startswith("-"):
+            return False
+        # Reject IDs with shell metacharacters
+        if any(c in session_id for c in [";", "|", "&", "$", "`", "(", ")", "{", "}", "<", ">", "\n", "\r"]):
+            return False
+        return True
