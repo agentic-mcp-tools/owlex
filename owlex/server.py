@@ -420,6 +420,37 @@ async def cancel_task(task_id: str) -> str:
 
 # === Council Tool ===
 
+async def _run_council_deliberation(
+    task,
+    prompt: str,
+    working_directory: str | None,
+    claude_opinion: str | None,
+    deliberate: bool,
+    critique: bool,
+    timeout: int,
+):
+    """Run council deliberation and update task with result."""
+    from .models import TaskStatus
+    try:
+        task.status = TaskStatus.RUNNING.value
+        council = Council(context=task.context)
+        response = await council.deliberate(
+            prompt=prompt,
+            working_directory=working_directory,
+            claude_opinion=claude_opinion,
+            deliberate=deliberate,
+            critique=critique,
+            timeout=timeout,
+        )
+        task.result = response.model_dump_json(indent=2)
+        task.status = TaskStatus.COMPLETED.value
+        task.end_time = datetime.now()
+    except Exception as e:
+        task.error = str(e)
+        task.status = TaskStatus.FAILED.value
+        task.end_time = datetime.now()
+
+
 @mcp.tool()
 async def council_ask(
     ctx: Context[ServerSession, None],
@@ -446,24 +477,42 @@ async def council_ask(
     architectural flaws instead of politely revising their answers.
     """
     if not prompt or not prompt.strip():
-        return json.dumps({"error": "'prompt' parameter is required."})
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump_json()
 
     working_directory, error = _validate_working_directory(working_directory)
     if error:
-        return json.dumps({"error": error})
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump_json()
 
-    # Use the Council class for orchestration
-    council = Council(context=ctx)
-    response = await council.deliberate(
+    # Create task and run council deliberation asynchronously
+    task = engine.create_task(
+        command="council_ask",
+        args={
+            "prompt": prompt.strip(),
+            "working_directory": working_directory,
+            "claude_opinion": claude_opinion,
+            "deliberate": deliberate,
+            "critique": critique,
+            "timeout": timeout,
+        },
+        context=ctx,
+    )
+
+    task.async_task = asyncio.create_task(_run_council_deliberation(
+        task,
         prompt=prompt.strip(),
         working_directory=working_directory,
         claude_opinion=claude_opinion,
         deliberate=deliberate,
         critique=critique,
         timeout=timeout,
-    )
+    ))
 
-    return response.model_dump_json(indent=2)
+    return TaskResponse(
+        success=True,
+        task_id=task.task_id,
+        status=task.status,
+        message="Council deliberation started. Use wait_for_task to get result.",
+    ).model_dump_json()
 
 
 def main():
