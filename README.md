@@ -5,18 +5,19 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
 
-MCP server for multi-agent orchestration. Run Codex, Gemini, and OpenCode from Claude Code.
+**Get a second opinion without leaving Claude Code.**
 
-## Features
-
-- **Council deliberation** - Query all agents in parallel, with optional revision round
-- **Session management** - Start fresh or resume with full context preserved
-- **Async execution** - Tasks run in background with timeout control
-- **Critique mode** - Agents find bugs and flaws in each other's answers
+Different AI models have different strengths and blind spots. Owlex lets you query Codex, Gemini, and OpenCode directly from Claude Code - and optionally run a structured deliberation where they review each other's answers before Claude synthesizes a final response.
 
 ![Async council demo](media/owlex_async_demo.gif)
 
-*Async council deliberation (7x speed) - start a query, continue working, check results later*
+## How the Council Works
+
+1. **Round 1** - Your question goes to each agent independently. They answer without seeing each other.
+2. **Round 2** - Each agent sees all Round 1 answers and can revise their position.
+3. **Synthesis** - Claude reviews everything and outputs a structured answer.
+
+Use it for architecture decisions, debugging tricky issues, or when you want more confidence than a single model provides. Not for every question - for the ones that matter.
 
 ## Installation
 
@@ -36,23 +37,21 @@ Add to `.mcp.json`:
 }
 ```
 
-## Tools
+## Usage
 
-### `council_ask`
-
-Query all agents and collect answers with optional deliberation.
+### Council Deliberation
 
 ```
-prompt           - Question to send (required)
-claude_opinion   - Your opinion to share with agents
-deliberate       - Enable revision round (default: true)
-critique         - Agents critique instead of revise (default: false)
-timeout          - Timeout per agent in seconds (default: 300)
+council_ask prompt="Should I use a monorepo or multiple repos for 5 microservices?"
 ```
 
-Returns `round_1` with initial answers, `round_2` with revisions (if enabled).
+Options:
+- `claude_opinion` - Share your initial thinking with agents
+- `deliberate` - Enable Round 2 revision (default: true)
+- `critique` - Agents critique each other instead of revise
+- `timeout` - Timeout per agent in seconds (default: 300)
 
-### Agent Sessions
+### Individual Agent Sessions
 
 | Tool | Description |
 |------|-------------|
@@ -61,7 +60,9 @@ Returns `round_1` with initial answers, `round_2` with revisions (if enabled).
 | `start_gemini_session` | New Gemini session |
 | `resume_gemini_session` | Resume with index or `latest` |
 
-### Task Management
+### Async Task Management
+
+Council runs in the background. Start a query, keep working, check results later.
 
 | Tool | Description |
 |------|-------------|
@@ -70,22 +71,28 @@ Returns `round_1` with initial answers, `round_2` with revisions (if enabled).
 | `list_tasks` | List tasks with status filter |
 | `cancel_task` | Kill running task |
 
-## Environment Variables
+## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CODEX_BYPASS_APPROVALS` | `false` | Bypass sandbox (dangerous) |
-| `CODEX_ENABLE_SEARCH` | `true` | Enable web search |
-| `GEMINI_YOLO_MODE` | `false` | Auto-approve actions |
-| `OPENCODE_AGENT` | `plan` | Agent: `plan` (read-only) or `build` |
-| `COUNCIL_EXCLUDE_AGENTS` | `` | Comma-separated agents to exclude |
-| `OWLEX_DEFAULT_TIMEOUT` | `300` | Default timeout in seconds |
+| `COUNCIL_EXCLUDE_AGENTS` | `` | Skip agents (e.g., `opencode,gemini`) |
+| `OWLEX_DEFAULT_TIMEOUT` | `300` | Timeout in seconds |
+| `CODEX_BYPASS_APPROVALS` | `false` | Bypass sandbox (use with caution) |
+| `GEMINI_YOLO_MODE` | `false` | Auto-approve Gemini actions |
+| `OPENCODE_AGENT` | `plan` | `plan` (read-only) or `build` |
+
+## Cost Notes
+
+- **Codex** and **Gemini** use your existing subscriptions (Claude Max, Google AI Pro, etc.)
+- **OpenCode** uses API tokens
+- Exclude agents with `COUNCIL_EXCLUDE_AGENTS` to control costs
+- Use council for important decisions, not every question
 
 ## When to Use Each Agent
 
-| Agent | Best For |
-|-------|----------|
-| **Codex** | Code review, bug finding, PRD discussion |
-| **Gemini** | Large codebase (1M context), multimodal |
-| **OpenCode** | Alternative perspective, plan mode |
-| **Claude** | Complex multi-step implementation |
+| Agent | Strengths |
+|-------|-----------|
+| **Codex (o3)** | Deep reasoning, code review, bug finding |
+| **Gemini** | 1M context window, multimodal, large codebases |
+| **OpenCode** | Alternative perspective, configurable models |
+| **Claude** | Complex multi-step implementation, synthesis |
