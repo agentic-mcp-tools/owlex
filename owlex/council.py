@@ -53,6 +53,18 @@ class Council:
         self.log_entries.append(msg)
         _log(msg)
 
+    async def notify(self, message: str, level: str = "info"):
+        """Send notification to MCP client if context supports it."""
+        if not self.context:
+            return
+        try:
+            session = getattr(self.context, 'session', None)
+            if session and hasattr(session, 'send_log_message'):
+                await session.send_log_message(level=level, data=message, logger="owlex")
+        except Exception:
+            # Notification failed - not critical, continue silently
+            pass
+
     async def deliberate(
         self,
         prompt: str,
@@ -93,11 +105,14 @@ class Council:
         excluded = config.council.exclude_agents
         agents = [a for a in ["codex", "gemini", "opencode"] if a not in excluded]
         self.log(f"Round 1: querying {', '.join(a.title() for a in agents)}...")
+        await self.notify(f"Council Round 1: querying {', '.join(a.title() for a in agents)}")
 
         round_1 = await self._run_round_1(prompt, working_directory, timeout)
+        await self.notify("Council Round 1 complete")
 
         round_2 = None
         if deliberate:
+            await self.notify("Council Round 2: deliberation phase")
             round_2 = await self._run_round_2(
                 prompt=prompt,
                 working_directory=working_directory,
@@ -114,6 +129,9 @@ class Council:
                 content=claude_opinion.strip(),
                 provided_at=council_start.isoformat(),
             )
+
+        total_duration = (datetime.now() - council_start).total_seconds()
+        await self.notify(f"Council deliberation complete ({total_duration:.1f}s)")
 
         return CouncilResponse(
             prompt=prompt,
@@ -166,6 +184,7 @@ class Council:
                 elapsed = (datetime.now() - round1_start).total_seconds()
                 status = "completed" if codex_task.status == "completed" else "failed"
                 self.log(f"Codex {status} ({elapsed:.1f}s)")
+                await self.notify(f"Codex {status} ({elapsed:.1f}s)")
 
             codex_task.async_task = asyncio.create_task(run_codex())
             async_tasks.append(codex_task.async_task)
@@ -187,6 +206,7 @@ class Council:
                 elapsed = (datetime.now() - round1_start).total_seconds()
                 status = "completed" if gemini_task.status == "completed" else "failed"
                 self.log(f"Gemini {status} ({elapsed:.1f}s)")
+                await self.notify(f"Gemini {status} ({elapsed:.1f}s)")
 
             gemini_task.async_task = asyncio.create_task(run_gemini())
             async_tasks.append(gemini_task.async_task)
@@ -208,6 +228,7 @@ class Council:
                 elapsed = (datetime.now() - round1_start).total_seconds()
                 status = "completed" if opencode_task.status == "completed" else "failed"
                 self.log(f"OpenCode {status} ({elapsed:.1f}s)")
+                await self.notify(f"OpenCode {status} ({elapsed:.1f}s)")
 
             opencode_task.async_task = asyncio.create_task(run_opencode())
             async_tasks.append(opencode_task.async_task)
@@ -355,6 +376,7 @@ class Council:
                     )
                 elapsed = (datetime.now() - round2_start).total_seconds()
                 self.log(f"Codex revised ({elapsed:.1f}s)")
+                await self.notify(f"Codex revised ({elapsed:.1f}s)")
 
             codex_delib_task.async_task = asyncio.create_task(run_codex_delib())
             async_tasks.append(codex_delib_task.async_task)
@@ -385,6 +407,7 @@ class Council:
                     )
                 elapsed = (datetime.now() - round2_start).total_seconds()
                 self.log(f"Gemini revised ({elapsed:.1f}s)")
+                await self.notify(f"Gemini revised ({elapsed:.1f}s)")
 
             gemini_delib_task.async_task = asyncio.create_task(run_gemini_delib())
             async_tasks.append(gemini_delib_task.async_task)
@@ -415,6 +438,7 @@ class Council:
                     )
                 elapsed = (datetime.now() - round2_start).total_seconds()
                 self.log(f"OpenCode revised ({elapsed:.1f}s)")
+                await self.notify(f"OpenCode revised ({elapsed:.1f}s)")
 
             opencode_delib_task.async_task = asyncio.create_task(run_opencode_delib())
             async_tasks.append(opencode_delib_task.async_task)
@@ -438,6 +462,7 @@ class Council:
 
         round2_elapsed = (datetime.now() - round2_start).total_seconds()
         self.log(f"Round 2 complete ({round2_elapsed:.1f}s)")
+        await self.notify("Council Round 2 complete")
 
         return CouncilRound(
             codex=build_agent_response(tasks["codex"], Agent.CODEX) if "codex" in tasks else None,

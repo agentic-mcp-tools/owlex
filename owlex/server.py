@@ -17,10 +17,137 @@ from mcp.server.session import ServerSession
 from .models import TaskResponse, ErrorCode, Agent
 from .engine import engine, DEFAULT_TIMEOUT, codex_runner, gemini_runner
 from .council import Council
+from .config import config
 
 
 # Initialize FastMCP server
 mcp = FastMCP("owlex-server")
+
+
+# === Resources ===
+
+async def _get_cli_version(cmd: str) -> str:
+    """Get version string from a CLI tool."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            cmd, "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        return stdout.decode().strip().split('\n')[0]
+    except Exception:
+        return "unknown"
+
+
+def _get_codex_model() -> str:
+    """Get Codex model from config file."""
+    import pathlib
+    config_path = pathlib.Path.home() / ".codex" / "config.toml"
+    try:
+        if config_path.exists():
+            content = config_path.read_text()
+            for line in content.split('\n'):
+                if line.startswith('model ='):
+                    return line.split('=')[1].strip().strip('"\'')
+    except Exception:
+        pass
+    return "default"
+
+
+def _get_gemini_model() -> str:
+    """Get Gemini model - uses CLI default."""
+    # Gemini CLI uses default model based on version
+    return "gemini-2.5-pro"  # Default for current CLI
+
+
+def _get_opencode_model() -> str:
+    """Get OpenCode model from env or default."""
+    model = os.environ.get("OPENCODE_MODEL", "").strip()
+    return model if model else "openrouter/anthropic/claude-sonnet-4"
+
+
+@mcp.resource("owlex://agents")
+async def get_agents() -> str:
+    """List available agents and their configuration."""
+    excluded = config.council.exclude_agents
+
+    # Query CLI versions in parallel
+    codex_ver, gemini_ver, opencode_ver = await asyncio.gather(
+        _get_cli_version("codex"),
+        _get_cli_version("gemini"),
+        _get_cli_version("opencode"),
+    )
+
+    agents = {
+        "codex": {
+            "available": "codex" not in excluded,
+            "cli_version": codex_ver,
+            "model": _get_codex_model(),
+            "description": "Deep reasoning, code review, bug finding",
+            "config": {
+                "enable_search": config.codex.enable_search,
+                "bypass_approvals": config.codex.bypass_approvals,
+            }
+        },
+        "gemini": {
+            "available": "gemini" not in excluded,
+            "cli_version": gemini_ver,
+            "model": _get_gemini_model(),
+            "description": "1M context window, multimodal, large codebases",
+            "config": {
+                "yolo_mode": config.gemini.yolo_mode,
+            }
+        },
+        "opencode": {
+            "available": "opencode" not in excluded,
+            "cli_version": opencode_ver,
+            "model": _get_opencode_model(),
+            "description": "Alternative perspective, configurable models",
+            "config": {
+                "agent_mode": config.opencode.agent,
+            }
+        },
+    }
+
+    return json.dumps({
+        "agents": agents,
+        "excluded": list(excluded),
+        "default_timeout": config.default_timeout,
+    }, indent=2)
+
+
+@mcp.resource("owlex://council/status")
+def get_council_status() -> str:
+    """Get status of running council deliberations."""
+    council_tasks = []
+
+    for task_id, task in engine.tasks.items():
+        if task.command == "council_ask":
+            elapsed = (datetime.now() - task.start_time).total_seconds()
+            council_tasks.append({
+                "task_id": task_id,
+                "status": task.status,
+                "elapsed_seconds": round(elapsed, 1),
+                "prompt": task.args.get("prompt", "")[:100] + "..." if len(task.args.get("prompt", "")) > 100 else task.args.get("prompt", ""),
+                "deliberate": task.args.get("deliberate", True),
+                "critique": task.args.get("critique", False),
+            })
+
+    # Sort by most recent first
+    council_tasks.sort(key=lambda x: x["elapsed_seconds"])
+
+    running = [t for t in council_tasks if t["status"] == "running"]
+    pending = [t for t in council_tasks if t["status"] == "pending"]
+
+    return json.dumps({
+        "running_count": len(running),
+        "pending_count": len(pending),
+        "total_count": len(council_tasks),
+        "running": running,
+        "pending": pending,
+        "recent": council_tasks[:5],
+    }, indent=2)
 
 
 def _log(msg: str):
@@ -306,6 +433,14 @@ async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> str:
                 status="timeout",
                 error=f"Task still running after {timeout}s. Use get_task_result to check later.",
                 error_code=ErrorCode.TIMEOUT,
+            ).model_dump_json()
+        except asyncio.CancelledError:
+            # User aborted the wait (e.g., pressed ESC) - task keeps running
+            return TaskResponse(
+                success=True,
+                task_id=task_id,
+                status=task.status,
+                message="Wait aborted. Task still running. Use get_task_result or wait_for_task later.",
             ).model_dump_json()
         except Exception as e:
             # Bug fix: Set task.status and task.error so subsequent calls are consistent
