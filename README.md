@@ -92,7 +92,7 @@ Council runs in the background. Start a query, keep working, check results later
 
 | Agent | Strengths |
 |-------|-----------|
-| **Codex (o3)** | Deep reasoning, code review, bug finding |
+| **Codex (gpt5.2-codex)** | Deep reasoning, code review, bug finding |
 | **Gemini** | 1M context window, multimodal, large codebases |
 | **OpenCode** | Alternative perspective, configurable models |
 | **Claude** | Complex multi-step implementation, synthesis |
