@@ -14,6 +14,10 @@ MCP server for multi-agent orchestration. Run Codex, Gemini, and OpenCode from C
 - **Async execution** - Tasks run in background with timeout control
 - **Critique mode** - Agents find bugs and flaws in each other's answers
 
+## Demo
+
+[**Watch demo (7x speed, 30s)**](media/owlex_async_demo_7x.mp4) - Async council deliberation: start a query, continue working, check results later
+
 ## Installation
 
 ```bash
