@@ -1,0 +1,18 @@
+{
+  "name": "owlex",
+  "description": "Delegate tasks to Codex, Gemini, and OpenCode AI agents via Owlex MCP",
+  "version": "0.1.6",
+  "author": {
+    "name": "Owlex Contributors"
+  },
+  "repository": "https://github.com/agentic-mcp-tools/owlex",
+  "license": "MIT",
+  "agents": "./agents/",
+  "hooks": "./hooks/delegation-hooks.json",
+  "mcpServers": {
+    "owlex": {
+      "command": "uvx",
+      "args": ["owlex"]
+    }
+  }
+}
