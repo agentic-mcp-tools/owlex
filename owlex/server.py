@@ -15,7 +15,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.session import ServerSession
 
 from .models import TaskResponse, ErrorCode, Agent
-from .engine import engine, DEFAULT_TIMEOUT, codex_runner, gemini_runner
+from .engine import engine, DEFAULT_TIMEOUT, codex_runner, gemini_runner, opencode_runner
 from .council import Council
 
 
@@ -197,12 +197,92 @@ async def resume_gemini_session(
     ).model_dump_json()
 
 
+# === OpenCode Tools ===
+
+@mcp.tool()
+async def start_opencode_session(
+    ctx: Context[ServerSession, None],
+    prompt: str = Field(description="The question or request to send"),
+    working_directory: str | None = Field(default=None, description="Working directory for OpenCode context"),
+) -> str:
+    """Start a new OpenCode session (no prior context)."""
+    if not prompt or not prompt.strip():
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+
+    working_directory, error = _validate_working_directory(working_directory)
+    if error:
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+
+    task = engine.create_task(
+        command=f"{Agent.OPENCODE.value}_exec",
+        args={"prompt": prompt.strip(), "working_directory": working_directory},
+        context=ctx,
+    )
+
+    task.async_task = asyncio.create_task(engine.run_agent(
+        task, opencode_runner, mode="exec",
+        prompt=prompt.strip(), working_directory=working_directory
+    ))
+
+    return TaskResponse(
+        success=True,
+        task_id=task.task_id,
+        status=task.status,
+        message="OpenCode session started. Use wait_for_task to get result.",
+    ).model_dump_json()
+
+
+@mcp.tool()
+async def resume_opencode_session(
+    ctx: Context[ServerSession, None],
+    prompt: str = Field(description="The question or request to send to the resumed session"),
+    session_id: str | None = Field(default=None, description="Session ID to resume (uses --continue if not provided)"),
+    working_directory: str | None = Field(default=None, description="Working directory for OpenCode context"),
+) -> str:
+    """Resume an existing OpenCode session with full conversation history."""
+    if not prompt or not prompt.strip():
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+
+    working_directory, error = _validate_working_directory(working_directory)
+    if error:
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+
+    use_continue = not session_id or not session_id.strip()
+    session_ref = "--continue" if use_continue else session_id.strip()
+
+    # Validate session ID if provided (not using --continue)
+    if not use_continue and not opencode_runner.validate_session_id(session_ref):
+        return TaskResponse(
+            success=False,
+            error=f"Invalid session_id: '{session_id}' - contains disallowed characters",
+            error_code=ErrorCode.INVALID_ARGS
+        ).model_dump_json()
+
+    task = engine.create_task(
+        command=f"{Agent.OPENCODE.value}_resume",
+        args={"session_id": session_ref, "prompt": prompt.strip(), "working_directory": working_directory},
+        context=ctx,
+    )
+
+    task.async_task = asyncio.create_task(engine.run_agent(
+        task, opencode_runner, mode="resume",
+        prompt=prompt.strip(), session_ref=session_ref, working_directory=working_directory
+    ))
+
+    return TaskResponse(
+        success=True,
+        task_id=task.task_id,
+        status=task.status,
+        message=f"OpenCode resume started{' (continuing last session)' if use_continue else f' for session {session_id}'}. Use wait_for_task to get result.",
+    ).model_dump_json()
+
+
 # === Task Management Tools ===
 
 @mcp.tool()
 async def get_task_result(task_id: str) -> str:
     """
-    Get the result of a task (Codex or Gemini).
+    Get the result of a task (Codex, Gemini, or OpenCode).
 
     Args:
         task_id: The task ID returned by start/resume session
@@ -462,9 +542,9 @@ async def council_ask(
     timeout: int = Field(default=DEFAULT_TIMEOUT, description="Timeout per agent in seconds"),
 ) -> str:
     """
-    Ask the council (Codex + Gemini) a question and collect their answers.
+    Ask the council (Codex, Gemini, and OpenCode) a question and collect their answers.
 
-    Sends the prompt to both Codex and Gemini in parallel, waits for responses,
+    Sends the prompt to all three agents in parallel, waits for responses,
     and returns all answers for the MCP client (Claude Code) to synthesize.
 
     If claude_opinion is provided, it will be shared with other council members
