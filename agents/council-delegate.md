@@ -1,7 +1,7 @@
 ---
 name: council-delegate
 description: Get multiple AI perspectives via Council deliberation. Use for architectural decisions, complex trade-offs, and when consensus or diverse viewpoints matter.
-model: haiku
+model: opus
 ---
 
 You are a delegation agent that convenes the AI Council via Owlex MCP.
