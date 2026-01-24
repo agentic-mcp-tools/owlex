@@ -5,7 +5,6 @@ Allows Claude Code to start/resume sessions with Codex or Gemini for advice
 """
 
 import asyncio
-import json
 import os
 import sys
 from datetime import datetime
@@ -15,7 +14,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.session import ServerSession
 
 from .models import TaskResponse, ErrorCode, Agent
-from .engine import engine, DEFAULT_TIMEOUT, codex_runner, gemini_runner
+from .engine import engine, DEFAULT_TIMEOUT, codex_runner, gemini_runner, opencode_runner
 from .council import Council
 from .config import config
 
@@ -173,14 +172,14 @@ async def start_codex_session(
     prompt: str = Field(description="The question or request to send"),
     working_directory: str | None = Field(default=None, description="Working directory for Codex (--cd flag)"),
     enable_search: bool = Field(default=True, description="Enable web search (--search flag)")
-) -> str:
+) -> dict:
     """Start a new Codex session (no prior context)."""
     if not prompt or not prompt.strip():
-        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump()
 
     working_directory, error = _validate_working_directory(working_directory)
     if error:
-        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump()
 
     task = engine.create_task(
         command=f"{Agent.CODEX.value}_exec",
@@ -198,7 +197,7 @@ async def start_codex_session(
         task_id=task.task_id,
         status=task.status,
         message="Codex session started. Use wait_for_task to get result.",
-    ).model_dump_json()
+    ).model_dump()
 
 
 @mcp.tool()
@@ -208,14 +207,14 @@ async def resume_codex_session(
     session_id: str | None = Field(default=None, description="Session ID to resume (uses --last if not provided)"),
     working_directory: str | None = Field(default=None, description="Working directory for Codex (--cd flag)"),
     enable_search: bool = Field(default=True, description="Enable web search (--search flag)")
-) -> str:
+) -> dict:
     """Resume an existing Codex session and ask for advice."""
     if not prompt or not prompt.strip():
-        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump()
 
     working_directory, error = _validate_working_directory(working_directory)
     if error:
-        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump()
 
     use_last = not session_id or not session_id.strip()
     session_ref = "--last" if use_last else session_id.strip()
@@ -226,7 +225,7 @@ async def resume_codex_session(
             success=False,
             error=f"Invalid session_id: '{session_id}' - contains disallowed characters",
             error_code=ErrorCode.INVALID_ARGS
-        ).model_dump_json()
+        ).model_dump()
 
     task = engine.create_task(
         command=f"{Agent.CODEX.value}_resume",
@@ -244,7 +243,7 @@ async def resume_codex_session(
         task_id=task.task_id,
         status=task.status,
         message=f"Codex resume started{' (last session)' if use_last else f' for session {session_id}'}. Use wait_for_task to get result.",
-    ).model_dump_json()
+    ).model_dump()
 
 
 # === Gemini Tools ===
@@ -254,14 +253,14 @@ async def start_gemini_session(
     ctx: Context[ServerSession, None],
     prompt: str = Field(description="The question or request to send"),
     working_directory: str | None = Field(default=None, description="Working directory for Gemini context"),
-) -> str:
+) -> dict:
     """Start a new Gemini CLI session (no prior context)."""
     if not prompt or not prompt.strip():
-        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump()
 
     working_directory, error = _validate_working_directory(working_directory)
     if error:
-        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump()
 
     task = engine.create_task(
         command=f"{Agent.GEMINI.value}_exec",
@@ -279,7 +278,7 @@ async def start_gemini_session(
         task_id=task.task_id,
         status=task.status,
         message="Gemini session started. Use wait_for_task to get result.",
-    ).model_dump_json()
+    ).model_dump()
 
 
 @mcp.tool()
@@ -288,14 +287,14 @@ async def resume_gemini_session(
     prompt: str = Field(description="The question or request to send to the resumed session"),
     session_ref: str = Field(default="latest", description="Session to resume: 'latest' for most recent, or index number"),
     working_directory: str | None = Field(default=None, description="Working directory for Gemini context"),
-) -> str:
+) -> dict:
     """Resume an existing Gemini CLI session with full conversation history."""
     if not prompt or not prompt.strip():
-        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump()
 
     working_directory, error = _validate_working_directory(working_directory)
     if error:
-        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump()
 
     # Validate session reference (must be numeric index or "latest")
     if not gemini_runner.validate_session_id(session_ref):
@@ -303,7 +302,7 @@ async def resume_gemini_session(
             success=False,
             error=f"Invalid session_ref: '{session_ref}' - must be 'latest' or a numeric index",
             error_code=ErrorCode.INVALID_ARGS
-        ).model_dump_json()
+        ).model_dump()
 
     task = engine.create_task(
         command=f"{Agent.GEMINI.value}_resume",
@@ -321,22 +320,102 @@ async def resume_gemini_session(
         task_id=task.task_id,
         status=task.status,
         message=f"Gemini resume started (session: {session_ref}). Use wait_for_task to get result.",
-    ).model_dump_json()
+    ).model_dump()
+
+
+# === OpenCode Tools ===
+
+@mcp.tool()
+async def start_opencode_session(
+    ctx: Context[ServerSession, None],
+    prompt: str = Field(description="The question or request to send"),
+    working_directory: str | None = Field(default=None, description="Working directory for OpenCode context"),
+) -> dict:
+    """Start a new OpenCode session (no prior context)."""
+    if not prompt or not prompt.strip():
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump()
+
+    working_directory, error = _validate_working_directory(working_directory)
+    if error:
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump()
+
+    task = engine.create_task(
+        command=f"{Agent.OPENCODE.value}_exec",
+        args={"prompt": prompt.strip(), "working_directory": working_directory},
+        context=ctx,
+    )
+
+    task.async_task = asyncio.create_task(engine.run_agent(
+        task, opencode_runner, mode="exec",
+        prompt=prompt.strip(), working_directory=working_directory
+    ))
+
+    return TaskResponse(
+        success=True,
+        task_id=task.task_id,
+        status=task.status,
+        message="OpenCode session started. Use wait_for_task to get result.",
+    ).model_dump()
+
+
+@mcp.tool()
+async def resume_opencode_session(
+    ctx: Context[ServerSession, None],
+    prompt: str = Field(description="The question or request to send to the resumed session"),
+    session_id: str | None = Field(default=None, description="Session ID to resume (uses --continue if not provided)"),
+    working_directory: str | None = Field(default=None, description="Working directory for OpenCode context"),
+) -> dict:
+    """Resume an existing OpenCode session with full conversation history."""
+    if not prompt or not prompt.strip():
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump()
+
+    working_directory, error = _validate_working_directory(working_directory)
+    if error:
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump()
+
+    use_continue = not session_id or not session_id.strip()
+    session_ref = "--continue" if use_continue else session_id.strip()
+
+    # Validate session ID if provided (not using --continue)
+    if not use_continue and not opencode_runner.validate_session_id(session_ref):
+        return TaskResponse(
+            success=False,
+            error=f"Invalid session_id: '{session_id}' - contains disallowed characters",
+            error_code=ErrorCode.INVALID_ARGS
+        ).model_dump()
+
+    task = engine.create_task(
+        command=f"{Agent.OPENCODE.value}_resume",
+        args={"session_id": session_ref, "prompt": prompt.strip(), "working_directory": working_directory},
+        context=ctx,
+    )
+
+    task.async_task = asyncio.create_task(engine.run_agent(
+        task, opencode_runner, mode="resume",
+        prompt=prompt.strip(), session_ref=session_ref, working_directory=working_directory
+    ))
+
+    return TaskResponse(
+        success=True,
+        task_id=task.task_id,
+        status=task.status,
+        message=f"OpenCode resume started{' (continuing last session)' if use_continue else f' for session {session_id}'}. Use wait_for_task to get result.",
+    ).model_dump()
 
 
 # === Task Management Tools ===
 
 @mcp.tool()
-async def get_task_result(task_id: str) -> str:
+async def get_task_result(task_id: str) -> dict:
     """
-    Get the result of a task (Codex or Gemini).
+    Get the result of a task (Codex, Gemini, or OpenCode).
 
     Args:
         task_id: The task ID returned by start/resume session
     """
     task = engine.get_task(task_id)
     if not task:
-        return TaskResponse(success=False, error=f"Task '{task_id}' not found.", error_code=ErrorCode.NOT_FOUND).model_dump_json()
+        return TaskResponse(success=False, error=f"Task '{task_id}' not found.", error_code=ErrorCode.NOT_FOUND).model_dump()
 
     if task.status == "pending":
         return TaskResponse(
@@ -344,7 +423,7 @@ async def get_task_result(task_id: str) -> str:
             task_id=task_id,
             status=task.status,
             message="Task is still pending.",
-        ).model_dump_json()
+        ).model_dump()
     elif task.status == "running":
         elapsed = (datetime.now() - task.start_time).total_seconds()
         return TaskResponse(
@@ -352,7 +431,7 @@ async def get_task_result(task_id: str) -> str:
             task_id=task_id,
             status=task.status,
             message=f"Task is still running ({elapsed:.1f}s elapsed).",
-        ).model_dump_json()
+        ).model_dump()
     elif task.status == "completed":
         return TaskResponse(
             success=True,
@@ -361,7 +440,7 @@ async def get_task_result(task_id: str) -> str:
             content=task.result,
             warnings=task.warnings,
             duration_seconds=(task.completion_time - task.start_time).total_seconds() if task.completion_time else None,
-        ).model_dump_json()
+        ).model_dump()
     elif task.status == "failed":
         return TaskResponse(
             success=False,
@@ -370,7 +449,7 @@ async def get_task_result(task_id: str) -> str:
             error=task.error,
             error_code=ErrorCode.EXECUTION_FAILED,
             duration_seconds=(task.completion_time - task.start_time).total_seconds() if task.completion_time else None,
-        ).model_dump_json()
+        ).model_dump()
     elif task.status == "cancelled":
         return TaskResponse(
             success=False,
@@ -379,7 +458,7 @@ async def get_task_result(task_id: str) -> str:
             error=task.error or "Task was cancelled.",
             error_code=ErrorCode.CANCELLED,
             duration_seconds=(task.completion_time - task.start_time).total_seconds() if task.completion_time else None,
-        ).model_dump_json()
+        ).model_dump()
     else:
         # Unknown status - should not happen but handle gracefully
         return TaskResponse(
@@ -388,11 +467,11 @@ async def get_task_result(task_id: str) -> str:
             status=task.status,
             error=f"Unexpected task status: {task.status}",
             error_code=ErrorCode.INTERNAL_ERROR,
-        ).model_dump_json()
+        ).model_dump()
 
 
 @mcp.tool()
-async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> str:
+async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """
     Wait for a task to complete and return its result.
 
@@ -402,7 +481,7 @@ async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> str:
     """
     task = engine.get_task(task_id)
     if not task:
-        return TaskResponse(success=False, error=f"Task '{task_id}' not found.", error_code=ErrorCode.NOT_FOUND).model_dump_json()
+        return TaskResponse(success=False, error=f"Task '{task_id}' not found.", error_code=ErrorCode.NOT_FOUND).model_dump()
 
     if task.status in ["completed", "failed", "cancelled"]:
         if task.status == "completed":
@@ -413,7 +492,7 @@ async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> str:
                 content=task.result,
                 warnings=task.warnings,
                 duration_seconds=(task.completion_time - task.start_time).total_seconds() if task.completion_time else None,
-            ).model_dump_json()
+            ).model_dump()
         error_code = ErrorCode.EXECUTION_FAILED if task.status == "failed" else ErrorCode.CANCELLED
         return TaskResponse(
             success=False,
@@ -421,7 +500,7 @@ async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> str:
             status=task.status,
             error=task.error,
             error_code=error_code,
-        ).model_dump_json()
+        ).model_dump()
 
     if task.async_task:
         try:
@@ -433,7 +512,7 @@ async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> str:
                 status="timeout",
                 error=f"Task still running after {timeout}s. Use get_task_result to check later.",
                 error_code=ErrorCode.TIMEOUT,
-            ).model_dump_json()
+            ).model_dump()
         except asyncio.CancelledError:
             # User aborted the wait (e.g., pressed ESC) - task keeps running
             return TaskResponse(
@@ -441,7 +520,7 @@ async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> str:
                 task_id=task_id,
                 status=task.status,
                 message="Wait aborted. Task still running. Use get_task_result or wait_for_task later.",
-            ).model_dump_json()
+            ).model_dump()
         except Exception as e:
             # Bug fix: Set task.status and task.error so subsequent calls are consistent
             task.status = "failed"
@@ -453,7 +532,7 @@ async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> str:
                 status=task.status,
                 error=task.error,
                 error_code=ErrorCode.INTERNAL_ERROR,
-            ).model_dump_json()
+            ).model_dump()
     else:
         # Bug fix: No async_task means task may have failed before launch or is in unexpected state
         # Return actual status instead of assuming CANCELLED
@@ -463,7 +542,7 @@ async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> str:
             status=task.status,
             error=task.error or f"Task has no async handler (status: {task.status})",
             error_code=ErrorCode.INTERNAL_ERROR,
-        ).model_dump_json()
+        ).model_dump()
 
     if task.status == "completed":
         return TaskResponse(
@@ -473,7 +552,7 @@ async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> str:
             content=task.result,
             warnings=task.warnings,
             duration_seconds=(task.completion_time - task.start_time).total_seconds() if task.completion_time else None,
-        ).model_dump_json()
+        ).model_dump()
 
     error_code = ErrorCode.EXECUTION_FAILED if task.status == "failed" else ErrorCode.CANCELLED
     return TaskResponse(
@@ -482,14 +561,14 @@ async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> str:
         status=task.status,
         error=task.error,
         error_code=error_code,
-    ).model_dump_json()
+    ).model_dump()
 
 
 @mcp.tool()
 async def list_tasks(
     status_filter: str | None = Field(default=None, description="Filter by status: pending, running, completed, failed, cancelled"),
     limit: int = Field(default=20, description="Maximum number of tasks to return"),
-) -> str:
+) -> dict:
     """
     List all tracked tasks with their current status.
 
@@ -511,15 +590,15 @@ async def list_tasks(
             "has_error": task.error is not None,
         })
 
-    return json.dumps({
+    return {
         "success": True,
         "count": len(tasks_list),
         "tasks": tasks_list,
-    }, indent=2)
+    }
 
 
 @mcp.tool()
-async def cancel_task(task_id: str) -> str:
+async def cancel_task(task_id: str) -> dict:
     """
     Cancel a running task and kill its subprocess.
 
@@ -528,7 +607,7 @@ async def cancel_task(task_id: str) -> str:
     """
     task = engine.get_task(task_id)
     if not task:
-        return TaskResponse(success=False, error=f"Task '{task_id}' not found.", error_code=ErrorCode.NOT_FOUND).model_dump_json()
+        return TaskResponse(success=False, error=f"Task '{task_id}' not found.", error_code=ErrorCode.NOT_FOUND).model_dump()
 
     if task.status in ["completed", "failed", "cancelled"]:
         return TaskResponse(
@@ -537,7 +616,7 @@ async def cancel_task(task_id: str) -> str:
             status=task.status,
             error=f"Task already {task.status}, cannot cancel.",
             error_code=ErrorCode.INVALID_ARGS,
-        ).model_dump_json()
+        ).model_dump()
 
     # Kill the subprocess and cancel the async task
     await engine.kill_task_subprocess(task)
@@ -550,7 +629,7 @@ async def cancel_task(task_id: str) -> str:
         task_id=task_id,
         status=task.status,
         message="Task cancelled successfully.",
-    ).model_dump_json()
+    ).model_dump()
 
 
 # === Council Tool ===
@@ -595,11 +674,11 @@ async def council_ask(
     deliberate: bool = Field(default=True, description="If true, share answers between agents for a second round of deliberation"),
     critique: bool = Field(default=False, description="If true, round 2 asks agents to critique/find flaws instead of revise"),
     timeout: int = Field(default=DEFAULT_TIMEOUT, description="Timeout per agent in seconds"),
-) -> str:
+) -> dict:
     """
-    Ask the council (Codex + Gemini) a question and collect their answers.
+    Ask the council (Codex, Gemini, and OpenCode) a question and collect their answers.
 
-    Sends the prompt to both Codex and Gemini in parallel, waits for responses,
+    Sends the prompt to all three agents in parallel, waits for responses,
     and returns all answers for the MCP client (Claude Code) to synthesize.
 
     If claude_opinion is provided, it will be shared with other council members
@@ -612,11 +691,11 @@ async def council_ask(
     architectural flaws instead of politely revising their answers.
     """
     if not prompt or not prompt.strip():
-        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump()
 
     working_directory, error = _validate_working_directory(working_directory)
     if error:
-        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump_json()
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump()
 
     # Create task and run council deliberation asynchronously
     task = engine.create_task(
@@ -647,7 +726,7 @@ async def council_ask(
         task_id=task.task_id,
         status=task.status,
         message="Council deliberation started. Use wait_for_task to get result.",
-    ).model_dump_json()
+    ).model_dump()
 
 
 def main():

@@ -2,7 +2,6 @@
 Tests for server.py MCP tool validation and error handling.
 """
 
-import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -83,7 +82,7 @@ class TestStartCodexSession:
 
         result = await start_codex_session(mock_context, prompt="")
 
-        response = json.loads(result)
+        response = result
         assert response["success"] is False
         assert response["error_code"] == ErrorCode.INVALID_ARGS.value
         assert "required" in response["error"]
@@ -94,7 +93,7 @@ class TestStartCodexSession:
 
         result = await start_codex_session(mock_context, prompt="   ")
 
-        response = json.loads(result)
+        response = result
         assert response["success"] is False
         assert response["error_code"] == ErrorCode.INVALID_ARGS.value
 
@@ -108,7 +107,7 @@ class TestStartCodexSession:
             working_directory="/nonexistent/path/xyz"
         )
 
-        response = json.loads(result)
+        response = result
         assert response["success"] is False
         assert response["error_code"] == ErrorCode.INVALID_ARGS.value
         assert "does not exist" in response["error"]
@@ -126,7 +125,7 @@ class TestGetTaskResult:
 
             result = await get_task_result("nonexistent-id")
 
-            response = json.loads(result)
+            response = result
             assert response["success"] is False
             assert response["error_code"] == ErrorCode.NOT_FOUND.value
 
@@ -143,7 +142,7 @@ class TestWaitForTask:
 
             result = await wait_for_task("nonexistent-id")
 
-            response = json.loads(result)
+            response = result
             assert response["success"] is False
             assert response["error_code"] == ErrorCode.NOT_FOUND.value
 
@@ -165,7 +164,7 @@ class TestWaitForTask:
 
             result = await wait_for_task("failed-123")
 
-            response = json.loads(result)
+            response = result
             assert response["success"] is False
             assert response["error_code"] == ErrorCode.EXECUTION_FAILED.value
 
@@ -187,7 +186,7 @@ class TestWaitForTask:
 
             result = await wait_for_task("cancelled-123")
 
-            response = json.loads(result)
+            response = result
             assert response["success"] is False
             assert response["error_code"] == ErrorCode.CANCELLED.value
 
@@ -204,7 +203,7 @@ class TestCancelTask:
 
             result = await cancel_task("nonexistent-id")
 
-            response = json.loads(result)
+            response = result
             assert response["success"] is False
             assert response["error_code"] == ErrorCode.NOT_FOUND.value
 
@@ -225,7 +224,7 @@ class TestCancelTask:
 
             result = await cancel_task("completed-123")
 
-            response = json.loads(result)
+            response = result
             assert response["success"] is False
             assert response["error_code"] == ErrorCode.INVALID_ARGS.value
             assert "already completed" in response["error"]
@@ -248,7 +247,7 @@ class TestCancelTask:
 
             result = await cancel_task("running-123")
 
-            response = json.loads(result)
+            response = result
             assert response["success"] is True
             assert response["status"] == "cancelled"
             mock_engine.kill_task_subprocess.assert_called_once_with(running_task)
@@ -267,7 +266,7 @@ class TestListTasks:
             # Pass explicit values for all Field() parameters
             result = await list_tasks(status_filter=None, limit=20)
 
-            response = json.loads(result)
+            response = result
             assert response["success"] is True
             assert response["count"] == 0
             assert response["tasks"] == []
@@ -296,7 +295,7 @@ class TestListTasks:
 
             result = await list_tasks(status_filter="running", limit=20)
 
-            response = json.loads(result)
+            response = result
             assert response["count"] == 1
             assert response["tasks"][0]["status"] == "running"
 
@@ -319,7 +318,7 @@ class TestListTasks:
 
             result = await list_tasks(status_filter=None, limit=3)
 
-            response = json.loads(result)
+            response = result
             assert len(response["tasks"]) == 3
 
 
@@ -336,7 +335,7 @@ class TestCouncilAsk:
 
         result = await council_ask(mock_context, prompt="")
 
-        response = json.loads(result)
+        response = result
         assert "error" in response
         assert "required" in response["error"]
 
@@ -350,6 +349,6 @@ class TestCouncilAsk:
             working_directory="/nonexistent/path/xyz"
         )
 
-        response = json.loads(result)
+        response = result
         assert "error" in response
         assert "does not exist" in response["error"]

@@ -1,0 +1,37 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "",
+      "hooks": []
+    }
+  ],
+  "UserPromptSubmit": [
+    {
+      "matcher": "(?i)(council|deliberate|multiple perspectives|get opinions)",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "echo 'SUGGESTION: Consider using the council-delegate subagent for this task'"
+        }
+      ]
+    },
+    {
+      "matcher": "(?i)(review.*code|code.*review|find.*bugs|security.*audit)",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "echo 'SUGGESTION: Consider delegating to codex-delegate for code review'"
+        }
+      ]
+    },
+    {
+      "matcher": "(?i)(entire.*codebase|all.*files|architecture.*overview|analyze.*project)",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "echo 'SUGGESTION: Consider delegating to gemini-delegate for large codebase analysis'"
+        }
+      ]
+    }
+  ]
+}
