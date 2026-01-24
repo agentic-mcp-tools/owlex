@@ -9,7 +9,7 @@
 
 Different AI models have different strengths and blind spots. Owlex lets you query Codex, Gemini, and OpenCode directly from Claude Code - and optionally run a structured deliberation where they review each other's answers before Claude synthesizes a final response.
 
-<video src="media/owlex_demo_final.mp4" autoplay loop muted playsinline></video>
+![Council demo](media/owlex_demo.gif)
 
 ## How the Council Works
 
