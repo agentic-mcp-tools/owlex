@@ -18,6 +18,16 @@ from .models import (
     CouncilMetadata,
 )
 from .engine import TaskEngine, engine
+from .roles import (
+    RoleId,
+    RoleDefinition,
+    TeamPreset,
+    RoleResolver,
+    RoleSpec,
+    BUILTIN_ROLES,
+    BUILTIN_TEAMS,
+    get_resolver,
+)
 
 __all__ = [
     "__version__",
@@ -32,4 +42,13 @@ __all__ = [
     "CouncilMetadata",
     "TaskEngine",
     "engine",
+    # Role system
+    "RoleId",
+    "RoleDefinition",
+    "TeamPreset",
+    "RoleResolver",
+    "RoleSpec",
+    "BUILTIN_ROLES",
+    "BUILTIN_TEAMS",
+    "get_resolver",
 ]

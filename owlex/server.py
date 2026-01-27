@@ -5,6 +5,7 @@ Allows Claude Code to start/resume sessions with Codex or Gemini for advice
 """
 
 import asyncio
+import json
 import os
 import sys
 from datetime import datetime
@@ -17,6 +18,7 @@ from .models import TaskResponse, ErrorCode, Agent
 from .engine import engine, DEFAULT_TIMEOUT, codex_runner, gemini_runner, opencode_runner
 from .council import Council
 from .config import config
+from .roles import get_resolver
 
 
 # Initialize FastMCP server
@@ -503,36 +505,54 @@ async def wait_for_task(task_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
         ).model_dump()
 
     if task.async_task:
-        try:
-            await asyncio.wait_for(asyncio.shield(task.async_task), timeout=timeout)
-        except asyncio.TimeoutError:
-            return TaskResponse(
-                success=False,
-                task_id=task_id,
-                status="timeout",
-                error=f"Task still running after {timeout}s. Use get_task_result to check later.",
-                error_code=ErrorCode.TIMEOUT,
-            ).model_dump()
-        except asyncio.CancelledError:
-            # User aborted the wait (e.g., pressed ESC) - task keeps running
-            return TaskResponse(
-                success=True,
-                task_id=task_id,
-                status=task.status,
-                message="Wait aborted. Task still running. Use get_task_result or wait_for_task later.",
-            ).model_dump()
-        except Exception as e:
-            # Bug fix: Set task.status and task.error so subsequent calls are consistent
-            task.status = "failed"
-            task.error = f"Task failed: {str(e)}"
-            task.completion_time = datetime.now()
-            return TaskResponse(
-                success=False,
-                task_id=task_id,
-                status=task.status,
-                error=task.error,
-                error_code=ErrorCode.INTERNAL_ERROR,
-            ).model_dump()
+        # Check if task already completed (e.g., between abort and re-wait)
+        if task.async_task.done():
+            try:
+                task.async_task.result()  # Re-raise any exception from the task
+            except asyncio.CancelledError:
+                # Task was cancelled - mark appropriately
+                if task.status not in ["completed", "failed", "cancelled"]:
+                    task.status = "cancelled"
+                    task.error = "Task was cancelled"
+                    task.completion_time = datetime.now()
+            except BaseException as e:
+                # Catch BaseException to handle all exceptions including SystemExit, KeyboardInterrupt
+                if task.status not in ["completed", "failed", "cancelled"]:
+                    task.status = "failed"
+                    task.error = f"Task failed: {str(e)}"
+                    task.completion_time = datetime.now()
+            # Fall through to return result below
+        else:
+            try:
+                await asyncio.wait_for(asyncio.shield(task.async_task), timeout=timeout)
+            except asyncio.TimeoutError:
+                return TaskResponse(
+                    success=False,
+                    task_id=task_id,
+                    status="timeout",
+                    error=f"Task still running after {timeout}s. Use get_task_result to check later.",
+                    error_code=ErrorCode.TIMEOUT,
+                ).model_dump()
+            except asyncio.CancelledError:
+                # User aborted the wait (e.g., pressed ESC) - task keeps running
+                return TaskResponse(
+                    success=True,
+                    task_id=task_id,
+                    status=task.status,
+                    message="Wait aborted. Task still running. Use get_task_result or wait_for_task later.",
+                ).model_dump()
+            except Exception as e:
+                # Bug fix: Set task.status and task.error so subsequent calls are consistent
+                task.status = "failed"
+                task.error = f"Task failed: {str(e)}"
+                task.completion_time = datetime.now()
+                return TaskResponse(
+                    success=False,
+                    task_id=task_id,
+                    status=task.status,
+                    error=task.error,
+                    error_code=ErrorCode.INTERNAL_ERROR,
+                ).model_dump()
     else:
         # Bug fix: No async_task means task may have failed before launch or is in unexpected state
         # Return actual status instead of assuming CANCELLED
@@ -642,6 +662,8 @@ async def _run_council_deliberation(
     deliberate: bool,
     critique: bool,
     timeout: int,
+    roles: dict[str, str] | list[str] | None = None,
+    team: str | None = None,
 ):
     """Run council deliberation and update task with result."""
     from .models import TaskStatus
@@ -655,9 +677,16 @@ async def _run_council_deliberation(
             deliberate=deliberate,
             critique=critique,
             timeout=timeout,
+            roles=roles,
+            team=team,
         )
         task.result = response.model_dump_json(indent=2)
         task.status = TaskStatus.COMPLETED.value
+        task.end_time = datetime.now()
+    except ValueError as e:
+        # Role/team validation errors
+        task.error = str(e)
+        task.status = TaskStatus.FAILED.value
         task.end_time = datetime.now()
     except Exception as e:
         task.error = str(e)
@@ -674,12 +703,40 @@ async def council_ask(
     deliberate: bool = Field(default=True, description="If true, share answers between agents for a second round of deliberation"),
     critique: bool = Field(default=False, description="If true, round 2 asks agents to critique/find flaws instead of revise"),
     timeout: int = Field(default=DEFAULT_TIMEOUT, description="Timeout per agent in seconds"),
+    roles: dict[str, str] | list[str] | None = Field(
+        default=None,
+        description=(
+            "Role assignments for agents. Can be:\n"
+            "- Dict mapping agent to role: {\"codex\": \"security\", \"gemini\": \"perf\"}\n"
+            "- List of roles (auto-assigned in order): [\"security\", \"perf\", \"skeptic\"]\n"
+            "Built-in roles: security, perf, skeptic, architect, maintainer, dx, testing"
+        )
+    ),
+    team: str | None = Field(
+        default=None,
+        description=(
+            "Team preset name (alternative to roles). "
+            "Built-in teams: security_audit, code_review, architecture_review, devil_advocate, balanced"
+        )
+    ),
 ) -> dict:
     """
     Ask the council (Codex, Gemini, and OpenCode) a question and collect their answers.
 
     Sends the prompt to all three agents in parallel, waits for responses,
     and returns all answers for the MCP client (Claude Code) to synthesize.
+
+    Supports specialist roles ("hats") for agents to operate with specific perspectives.
+
+    Role specification (mutually exclusive, priority order):
+    1. roles parameter - explicit mapping or auto-assign list
+    2. team parameter - use a predefined team preset
+    3. Neither - all agents operate without special roles
+
+    Examples:
+    - roles={"codex": "security", "gemini": "perf"} - explicit assignment
+    - roles=["security", "perf", "skeptic"] - auto-assign to codex, gemini, opencode
+    - team="security_audit" - use the security audit team preset
 
     If claude_opinion is provided, it will be shared with other council members
     during deliberation so they can consider Claude's perspective.
@@ -697,6 +754,32 @@ async def council_ask(
     if error:
         return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump()
 
+    # Validate that roles and team are not both specified
+    if roles is not None and team is not None:
+        return TaskResponse(
+            success=False,
+            error="Cannot specify both 'roles' and 'team' parameters. Use one or the other.",
+            error_code=ErrorCode.INVALID_ARGS
+        ).model_dump()
+
+    # Early validation of roles/team to return proper error codes
+    excluded = config.council.exclude_agents
+    active_agents = [a for a in ["codex", "gemini", "opencode"] if a not in excluded]
+    role_spec = roles if roles is not None else team
+    try:
+        resolver = get_resolver()
+        resolved_roles = resolver.resolve(role_spec, active_agents)
+    except ValueError as e:
+        return TaskResponse(
+            success=False,
+            error=str(e),
+            error_code=ErrorCode.INVALID_ARGS
+        ).model_dump()
+
+    # Build role summary for initial response
+    role_assignments = {agent: role.id for agent, role in resolved_roles.items()}
+    role_names = {agent: role.name for agent, role in resolved_roles.items()}
+
     # Create task and run council deliberation asynchronously
     task = engine.create_task(
         command="council_ask",
@@ -707,6 +790,8 @@ async def council_ask(
             "deliberate": deliberate,
             "critique": critique,
             "timeout": timeout,
+            "roles": roles,
+            "team": team,
         },
         context=ctx,
     )
@@ -719,14 +804,28 @@ async def council_ask(
         deliberate=deliberate,
         critique=critique,
         timeout=timeout,
+        roles=roles,
+        team=team,
     ))
 
-    return TaskResponse(
+    # Return with role information
+    response = TaskResponse(
         success=True,
         task_id=task.task_id,
         status=task.status,
         message="Council deliberation started. Use wait_for_task to get result.",
     ).model_dump()
+
+    # Add role details to response
+    response["council"] = {
+        "agents": active_agents,
+        "excluded": list(excluded),
+        "team": team,
+        "roles": role_assignments,
+        "role_names": role_names,
+    }
+
+    return response
 
 
 def main():
@@ -781,6 +880,16 @@ def main():
                     await server_task
                 except asyncio.CancelledError:
                     pass
+            # If server task completed (possibly due to client disconnect), log it
+            if server_task in done:
+                try:
+                    server_task.result()  # Re-raise any exception
+                except Exception as e:
+                    _log(f"Server task ended: {e}")
+        except asyncio.CancelledError:
+            _log("Server cancelled")
+        except Exception as e:
+            _log(f"Server error: {e}")
         finally:
             # Kill all running tasks before exit
             await engine.kill_all_tasks()

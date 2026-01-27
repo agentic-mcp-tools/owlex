@@ -119,4 +119,7 @@ class CouncilResponse(BaseModel):
     claude_opinion: ClaudeOpinion | None = None
     round_1: CouncilRound
     round_2: CouncilRound | None = None
+    # Role assignments (None if all agents used neutral/no roles)
+    # Maps agent name to role ID, e.g., {"codex": "security", "gemini": "perf"}
+    roles: dict[str, str] | None = None
     metadata: CouncilMetadata
