@@ -293,9 +293,16 @@ class TaskEngine:
             task.output_lines = []
             task.stream_complete = False
 
+            # Use DEVNULL when no prompt to write (avoids hanging Claude CLI)
+            stdin_mode = (
+                asyncio.subprocess.DEVNULL
+                if (not prompt and not stream)
+                else asyncio.subprocess.PIPE
+            )
+
             process = await asyncio.create_subprocess_exec(
                 *command,
-                stdin=asyncio.subprocess.PIPE,
+                stdin=stdin_mode,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
