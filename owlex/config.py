@@ -33,6 +33,14 @@ class OpenCodeConfig:
 
 
 @dataclass(frozen=True)
+class ClaudeORConfig:
+    """Configuration for Claude Code via OpenRouter integration."""
+    api_key: str | None = None  # OpenRouter API key
+    model: str | None = None  # OpenRouter model (e.g., deepseek/deepseek-v3.2)
+    clean_output: bool = True
+
+
+@dataclass(frozen=True)
 class CouncilConfig:
     """Configuration for council orchestration."""
     exclude_agents: frozenset[str] = frozenset()  # Agents to exclude from council
@@ -46,6 +54,7 @@ class OwlexConfig:
     codex: CodexConfig
     gemini: GeminiConfig
     opencode: OpenCodeConfig
+    claudeor: ClaudeORConfig
     council: CouncilConfig
     default_timeout: int = 300
 
@@ -82,6 +91,12 @@ def load_config() -> OwlexConfig:
         clean_output=os.environ.get("OPENCODE_CLEAN_OUTPUT", "true").lower() == "true",
     )
 
+    claudeor = ClaudeORConfig(
+        api_key=os.environ.get("OPENROUTER_API_KEY") or os.environ.get("CLAUDEOR_API_KEY") or None,
+        model=os.environ.get("CLAUDEOR_MODEL") or None,
+        clean_output=os.environ.get("CLAUDEOR_CLEAN_OUTPUT", "true").lower() == "true",
+    )
+
     # Parse council exclude agents (comma-separated list)
     exclude_raw = os.environ.get("COUNCIL_EXCLUDE_AGENTS", "")
     exclude_agents = frozenset(
@@ -112,6 +127,7 @@ def load_config() -> OwlexConfig:
         codex=codex,
         gemini=gemini,
         opencode=opencode,
+        claudeor=claudeor,
         council=council,
         default_timeout=timeout,
     )

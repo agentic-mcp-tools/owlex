@@ -104,6 +104,8 @@ council_ask prompt="Is this design secure?" team="security_audit"
 | `resume_gemini_session` | Resume with index or `latest` |
 | `start_opencode_session` | New OpenCode session |
 | `resume_opencode_session` | Resume with session ID or `--continue` |
+| `start_claudeor_session` | New Claude via OpenRouter session |
+| `resume_claudeor_session` | Resume with session ID or `--continue` |
 
 ### Claude Code Skills
 
@@ -131,13 +133,15 @@ Council runs in the background. Start a query, keep working, check results later
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `COUNCIL_EXCLUDE_AGENTS` | `` | Skip agents (e.g., `opencode,gemini`) |
+| `COUNCIL_EXCLUDE_AGENTS` | `` | Skip agents (e.g., `opencode,gemini,claudeor`) |
 | `COUNCIL_DEFAULT_TEAM` | `` | Default team when none specified (empty = neutral) |
 | `COUNCIL_CLAUDE_OPINION` | `false` | Claude shares its opinion with agents by default |
 | `OWLEX_DEFAULT_TIMEOUT` | `300` | Timeout in seconds |
 | `CODEX_BYPASS_APPROVALS` | `false` | Bypass sandbox (use with caution) |
 | `GEMINI_YOLO_MODE` | `false` | Auto-approve Gemini actions |
 | `OPENCODE_AGENT` | `plan` | `plan` (read-only) or `build` |
+| `OPENROUTER_API_KEY` | `` | OpenRouter API key (enables ClaudeOR agent) |
+| `CLAUDEOR_MODEL` | `` | OpenRouter model for ClaudeOR (e.g., `deepseek/deepseek-v3.2`) |
 
 ## Cost Notes
 
@@ -153,4 +157,5 @@ Council runs in the background. Start a query, keep working, check results later
 | **Codex (gpt5.2-codex)** | Deep reasoning, code review, bug finding |
 | **Gemini** | 1M context window, multimodal, large codebases |
 | **OpenCode** | Alternative perspective, configurable models |
+| **ClaudeOR** | Claude Code + OpenRouter (DeepSeek, GPT-4o, etc.) |
 | **Claude** | Complex multi-step implementation, synthesis |

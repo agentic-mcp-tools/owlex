@@ -35,6 +35,7 @@ class Agent(str, Enum):
     CODEX = "codex"
     GEMINI = "gemini"
     OPENCODE = "opencode"
+    CLAUDEOR = "claudeor"  # Claude Code via OpenRouter
 
 
 @dataclass
@@ -101,6 +102,7 @@ class CouncilRound(BaseModel):
     codex: AgentResponse | None = None
     gemini: AgentResponse | None = None
     opencode: AgentResponse | None = None
+    claudeor: AgentResponse | None = None  # Claude Code via OpenRouter
 
 
 class CouncilMetadata(BaseModel):

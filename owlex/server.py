@@ -15,7 +15,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.session import ServerSession
 
 from .models import TaskResponse, ErrorCode, Agent
-from .engine import engine, DEFAULT_TIMEOUT, codex_runner, gemini_runner, opencode_runner
+from .engine import engine, DEFAULT_TIMEOUT, codex_runner, gemini_runner, opencode_runner, claudeor_runner
 from .council import Council
 from .config import config
 from .roles import get_resolver
@@ -405,6 +405,109 @@ async def resume_opencode_session(
     ).model_dump()
 
 
+# === Claude OpenRouter Session Tools ===
+
+@mcp.tool()
+async def start_claudeor_session(
+    ctx: Context[ServerSession, None],
+    prompt: str = Field(description="The question or request to send"),
+    working_directory: str | None = Field(default=None, description="Working directory for Claude context"),
+) -> dict:
+    """
+    Start a new Claude Code session via OpenRouter.
+
+    Uses Claude CLI with OpenRouter backend, allowing alternative models
+    like DeepSeek, GPT-4o, Gemini, etc. Configure model via CLAUDEOR_MODEL env var.
+    """
+    if not prompt or not prompt.strip():
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump()
+
+    working_directory, error = _validate_working_directory(working_directory)
+    if error:
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump()
+
+    # Check if API key is configured
+    if not config.claudeor.api_key:
+        return TaskResponse(
+            success=False,
+            error="OPENROUTER_API_KEY or CLAUDEOR_API_KEY environment variable not set",
+            error_code=ErrorCode.INVALID_ARGS
+        ).model_dump()
+
+    task = engine.create_task(
+        command=f"{Agent.CLAUDEOR.value}_exec",
+        args={"prompt": prompt.strip(), "working_directory": working_directory},
+        context=ctx,
+    )
+
+    task.async_task = asyncio.create_task(engine.run_agent(
+        task, claudeor_runner, mode="exec",
+        prompt=prompt.strip(), working_directory=working_directory
+    ))
+
+    model_info = f" ({config.claudeor.model})" if config.claudeor.model else ""
+    return TaskResponse(
+        success=True,
+        task_id=task.task_id,
+        status=task.status,
+        message=f"Claude OpenRouter{model_info} session started. Use wait_for_task to get result.",
+    ).model_dump()
+
+
+@mcp.tool()
+async def resume_claudeor_session(
+    ctx: Context[ServerSession, None],
+    prompt: str = Field(description="The question or request to send to the resumed session"),
+    session_id: str | None = Field(default=None, description="Session ID to resume (uses --continue if not provided)"),
+    working_directory: str | None = Field(default=None, description="Working directory for Claude context"),
+) -> dict:
+    """Resume an existing Claude OpenRouter session with full conversation history."""
+    if not prompt or not prompt.strip():
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump()
+
+    working_directory, error = _validate_working_directory(working_directory)
+    if error:
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump()
+
+    # Check if API key is configured
+    if not config.claudeor.api_key:
+        return TaskResponse(
+            success=False,
+            error="OPENROUTER_API_KEY or CLAUDEOR_API_KEY environment variable not set",
+            error_code=ErrorCode.INVALID_ARGS
+        ).model_dump()
+
+    use_continue = not session_id or not session_id.strip()
+    session_ref = "continue" if use_continue else session_id.strip()
+
+    # Validate session ID if provided
+    if not use_continue and not claudeor_runner.validate_session_id(session_ref):
+        return TaskResponse(
+            success=False,
+            error=f"Invalid session_id: '{session_id}' - contains disallowed characters",
+            error_code=ErrorCode.INVALID_ARGS
+        ).model_dump()
+
+    task = engine.create_task(
+        command=f"{Agent.CLAUDEOR.value}_resume",
+        args={"session_id": session_ref, "prompt": prompt.strip(), "working_directory": working_directory},
+        context=ctx,
+    )
+
+    task.async_task = asyncio.create_task(engine.run_agent(
+        task, claudeor_runner, mode="resume",
+        prompt=prompt.strip(), session_ref=session_ref, working_directory=working_directory
+    ))
+
+    model_info = f" ({config.claudeor.model})" if config.claudeor.model else ""
+    return TaskResponse(
+        success=True,
+        task_id=task.task_id,
+        status=task.status,
+        message=f"Claude OpenRouter{model_info} resume started{' (continuing last session)' if use_continue else f' for session {session_id}'}. Use wait_for_task to get result.",
+    ).model_dump()
+
+
 # === Task Management Tools ===
 
 @mcp.tool()
@@ -764,7 +867,7 @@ async def council_ask(
 
     # Early validation of roles/team to return proper error codes
     excluded = config.council.exclude_agents
-    active_agents = [a for a in ["codex", "gemini", "opencode"] if a not in excluded]
+    active_agents = [a for a in ["codex", "gemini", "opencode", "claudeor"] if a not in excluded]
 
     # Use default team from config if no roles/team specified
     effective_team = team if team is not None else config.council.default_team
@@ -826,6 +929,7 @@ async def council_ask(
         "team": effective_team,
         "roles": role_assignments,
         "role_names": role_names,
+        "include_claude_opinion": config.council.include_claude_opinion,
     }
 
     return response

@@ -41,6 +41,7 @@ def build_deliberation_prompt(
     codex_answer: str | None = None,
     gemini_answer: str | None = None,
     opencode_answer: str | None = None,
+    claudeor_answer: str | None = None,
     claude_answer: str | None = None,
     critique: bool = False,
     include_original: bool = False,
@@ -59,6 +60,7 @@ def build_deliberation_prompt(
         codex_answer: Codex's round 1 answer (optional if excluded)
         gemini_answer: Gemini's round 1 answer (optional if excluded)
         opencode_answer: OpenCode's round 1 answer (optional if excluded)
+        claudeor_answer: ClaudeOR's round 1 answer (optional if excluded)
         claude_answer: Optional Claude opinion to include
         critique: If True, use critique mode prompts
         include_original: If True, include original_prompt in the output (for exec fallback)
@@ -91,6 +93,9 @@ def build_deliberation_prompt(
     if opencode_answer:
         parts.extend(["", "OPENCODE'S ANSWER:", opencode_answer])
 
+    if claudeor_answer:
+        parts.extend(["", "CLAUDE (OPENROUTER)'S ANSWER:", claudeor_answer])
+
     parts.extend(["", instruction])
 
     return "\n".join(parts)
@@ -120,6 +125,7 @@ def build_deliberation_prompt_with_role(
     codex_answer: str | None = None,
     gemini_answer: str | None = None,
     opencode_answer: str | None = None,
+    claudeor_answer: str | None = None,
     claude_answer: str | None = None,
     critique: bool = False,
     include_original: bool = False,
@@ -136,6 +142,7 @@ def build_deliberation_prompt_with_role(
         codex_answer: Codex's round 1 answer
         gemini_answer: Gemini's round 1 answer
         opencode_answer: OpenCode's round 1 answer
+        claudeor_answer: ClaudeOR's round 1 answer
         claude_answer: Optional Claude opinion
         critique: If True, use critique mode prompts
         include_original: If True, include original_prompt (for exec fallback)
@@ -149,6 +156,7 @@ def build_deliberation_prompt_with_role(
         codex_answer=codex_answer,
         gemini_answer=gemini_answer,
         opencode_answer=opencode_answer,
+        claudeor_answer=claudeor_answer,
         claude_answer=claude_answer,
         critique=critique,
         include_original=include_original,

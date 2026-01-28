@@ -12,7 +12,7 @@ from typing import Any
 
 from .config import config
 from .models import Task, TaskStatus, AgentResponse, Agent
-from .agents import CodexRunner, GeminiRunner, OpenCodeRunner
+from .agents import CodexRunner, GeminiRunner, OpenCodeRunner, ClaudeORRunner
 from .agents.base import AgentRunner, AgentCommand
 
 
@@ -38,6 +38,7 @@ def build_agent_response(
         Agent.CODEX.value: "Codex Output:\n\n",
         Agent.GEMINI.value: "Gemini Output:\n\n",
         Agent.OPENCODE.value: "OpenCode Output:\n\n",
+        Agent.CLAUDEOR.value: "Claude (OpenRouter) Output:\n\n",
     }
     prefix = prefix_map.get(agent_name, "")
 
@@ -62,12 +63,14 @@ NotifyCallback = Callable[[str, str], Any] | None
 codex_runner = CodexRunner()
 gemini_runner = GeminiRunner()
 opencode_runner = OpenCodeRunner()
+claudeor_runner = ClaudeORRunner()
 
 # Map Agent enum to runner instances
 AGENT_RUNNERS: dict[Agent, AgentRunner] = {
     Agent.CODEX: codex_runner,
     Agent.GEMINI: gemini_runner,
     Agent.OPENCODE: opencode_runner,
+    Agent.CLAUDEOR: claudeor_runner,
 }
 
 
@@ -268,6 +271,8 @@ class TaskEngine:
         if timeout is None:
             timeout = config.default_timeout
 
+        import os as _os
+
         command = agent_cmd.command
         prompt = agent_cmd.prompt
         output_cleaner = lambda stdout, p: stdout  # Default no-op cleaner
@@ -275,6 +280,13 @@ class TaskEngine:
         cwd = agent_cmd.cwd
         not_found_hint = agent_cmd.not_found_hint
         stream = agent_cmd.stream
+        env_overrides = agent_cmd.env_overrides
+
+        # Build environment with overrides
+        env = None
+        if env_overrides:
+            env = _os.environ.copy()
+            env.update(env_overrides)
 
         try:
             task.status = TaskStatus.RUNNING.value
@@ -286,7 +298,8 @@ class TaskEngine:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=cwd
+                cwd=cwd,
+                env=env,
             )
 
             task.process = process

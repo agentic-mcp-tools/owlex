@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from .config import config
-from .engine import engine, build_agent_response, codex_runner, gemini_runner, opencode_runner
+from .engine import engine, build_agent_response, codex_runner, gemini_runner, opencode_runner, claudeor_runner
 from .prompts import inject_role_prefix, build_deliberation_prompt_with_role
 from .roles import RoleSpec, RoleDefinition, RoleResolver, RoleId, get_resolver
 from .models import (
@@ -140,7 +140,11 @@ class Council:
 
         # Determine which agents to run
         excluded = config.council.exclude_agents
-        active_agents = [a for a in ["codex", "gemini", "opencode"] if a not in excluded]
+        # Include claudeor only if API key is configured
+        all_agents = ["codex", "gemini", "opencode"]
+        if config.claudeor.api_key:
+            all_agents.append("claudeor")
+        active_agents = [a for a in all_agents if a not in excluded]
 
         # Resolve roles (team parameter is just a string that resolves to a team preset)
         role_spec = roles if roles is not None else team
@@ -323,6 +327,35 @@ class Council:
             opencode_task.async_task = asyncio.create_task(run_opencode())
             async_tasks.append(opencode_task.async_task)
 
+        if "claudeor" not in excluded and config.claudeor.api_key:
+            claudeor_role = roles.get("claudeor")
+            claudeor_prompt = inject_role_prefix(prompt, claudeor_role)
+
+            claudeor_task = self._engine.create_task(
+                command=f"council_{Agent.CLAUDEOR.value}",
+                args={"prompt": claudeor_prompt, "working_directory": working_directory},
+                context=self.context,
+            )
+            tasks["claudeor"] = claudeor_task
+
+            # Capture prompt in closure
+            _claudeor_prompt = claudeor_prompt
+
+            async def run_claudeor():
+                # Clean start for R1 - session ID captured after completion
+                await self._engine.run_agent(
+                    claudeor_task, claudeor_runner, mode="exec",
+                    prompt=_claudeor_prompt, working_directory=working_directory
+                )
+                elapsed = (datetime.now() - round1_start).total_seconds()
+                status = "completed" if claudeor_task.status == "completed" else "failed"
+                model_name = config.claudeor.model or "Claude/OpenRouter"
+                self.log(f"{model_name} {status} ({elapsed:.1f}s)")
+                await self.notify(f"{model_name} {status} ({elapsed:.1f}s)")
+
+            claudeor_task.async_task = asyncio.create_task(run_claudeor())
+            async_tasks.append(claudeor_task.async_task)
+
         # Wait for all tasks with timeout
         if async_tasks:
             done, pending = await asyncio.wait(
@@ -389,16 +422,31 @@ class Council:
                 self.log("OpenCode session ID not found, R2 will use exec mode")
             return session
 
-        codex_session, gemini_session, opencode_session = await asyncio.gather(
+        async def parse_claudeor_session():
+            if "claudeor" not in tasks or tasks["claudeor"].status != "completed":
+                return None
+            session = await claudeor_runner.parse_session_id(
+                "", since_mtime=r1_start_mtime, working_directory=working_directory
+            )
+            if session and not claudeor_runner.validate_session_id(session):
+                self.log(f"ClaudeOR session ID validation failed: {session}")
+                return None
+            if not session:
+                self.log("ClaudeOR session ID not found, R2 will use exec mode")
+            return session
+
+        codex_session, gemini_session, opencode_session, claudeor_session = await asyncio.gather(
             parse_codex_session(),
             parse_gemini_session(),
             parse_opencode_session(),
+            parse_claudeor_session(),
         )
 
         return CouncilRound(
             codex=build_agent_response(tasks["codex"], Agent.CODEX, session_id=codex_session) if "codex" in tasks else None,
             gemini=build_agent_response(tasks["gemini"], Agent.GEMINI, session_id=gemini_session) if "gemini" in tasks else None,
             opencode=build_agent_response(tasks["opencode"], Agent.OPENCODE, session_id=opencode_session) if "opencode" in tasks else None,
+            claudeor=build_agent_response(tasks["claudeor"], Agent.CLAUDEOR, session_id=claudeor_session) if "claudeor" in tasks else None,
         )
 
     async def _run_round_2(
@@ -425,10 +473,12 @@ class Council:
         codex_session = round_1.codex.session_id if round_1.codex else None
         gemini_session = round_1.gemini.session_id if round_1.gemini else None
         opencode_session = round_1.opencode.session_id if round_1.opencode else None
+        claudeor_session = round_1.claudeor.session_id if round_1.claudeor else None
 
         codex_content = (round_1.codex.content or round_1.codex.error or "(no response)") if round_1.codex else None
         gemini_content = (round_1.gemini.content or round_1.gemini.error or "(no response)") if round_1.gemini else None
         opencode_content = (round_1.opencode.content or round_1.opencode.error or "(no response)") if round_1.opencode else None
+        claudeor_content = (round_1.claudeor.content or round_1.claudeor.error or "(no response)") if round_1.claudeor else None
         claude_content = claude_opinion.strip() if claude_opinion else None
 
         round2_start = datetime.now()
@@ -452,6 +502,7 @@ class Council:
                 codex_answer=codex_content,
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
+                claudeor_answer=claudeor_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=False,
@@ -463,6 +514,7 @@ class Council:
                 codex_answer=codex_content,
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
+                claudeor_answer=claudeor_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=True,
@@ -511,6 +563,7 @@ class Council:
                 codex_answer=codex_content,
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
+                claudeor_answer=claudeor_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=False,
@@ -522,6 +575,7 @@ class Council:
                 codex_answer=codex_content,
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
+                claudeor_answer=claudeor_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=True,
@@ -568,6 +622,7 @@ class Council:
                 codex_answer=codex_content,
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
+                claudeor_answer=claudeor_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=False,
@@ -579,6 +634,7 @@ class Council:
                 codex_answer=codex_content,
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
+                claudeor_answer=claudeor_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=True,
@@ -616,6 +672,66 @@ class Council:
             opencode_delib_task.async_task = asyncio.create_task(run_opencode_delib())
             async_tasks.append(opencode_delib_task.async_task)
 
+        if "claudeor" not in excluded and config.claudeor.api_key:
+            claudeor_role = roles.get("claudeor")
+            # Build prompt for resume mode (no original needed - agent has R1 context)
+            claudeor_delib_prompt_resume = build_deliberation_prompt_with_role(
+                original_prompt=prompt,
+                role=claudeor_role,
+                codex_answer=codex_content,
+                gemini_answer=gemini_content,
+                opencode_answer=opencode_content,
+                claudeor_answer=claudeor_content,
+                claude_answer=claude_content,
+                critique=critique,
+                include_original=False,
+            )
+            # Build prompt for exec fallback (include original - agent starts fresh)
+            claudeor_delib_prompt_exec = build_deliberation_prompt_with_role(
+                original_prompt=prompt,
+                role=claudeor_role,
+                codex_answer=codex_content,
+                gemini_answer=gemini_content,
+                opencode_answer=opencode_content,
+                claudeor_answer=claudeor_content,
+                claude_answer=claude_content,
+                critique=critique,
+                include_original=True,
+            )
+
+            claudeor_delib_task = self._engine.create_task(
+                command=f"council_{Agent.CLAUDEOR.value}_delib",
+                args={"prompt": claudeor_delib_prompt_resume, "working_directory": working_directory},
+                context=self.context,
+            )
+            tasks["claudeor"] = claudeor_delib_task
+
+            # Capture session and prompts in closure
+            _claudeor_session = claudeor_session
+            _claudeor_delib_prompt_resume = claudeor_delib_prompt_resume
+            _claudeor_delib_prompt_exec = claudeor_delib_prompt_exec
+
+            async def run_claudeor_delib():
+                # Resume with explicit session ID if available, otherwise exec with full context
+                if _claudeor_session:
+                    await self._engine.run_agent(
+                        claudeor_delib_task, claudeor_runner, mode="resume",
+                        session_ref=_claudeor_session,
+                        prompt=_claudeor_delib_prompt_resume, working_directory=working_directory
+                    )
+                else:
+                    await self._engine.run_agent(
+                        claudeor_delib_task, claudeor_runner, mode="exec",
+                        prompt=_claudeor_delib_prompt_exec, working_directory=working_directory
+                    )
+                elapsed = (datetime.now() - round2_start).total_seconds()
+                model_name = config.claudeor.model or "Claude/OpenRouter"
+                self.log(f"{model_name} revised ({elapsed:.1f}s)")
+                await self.notify(f"{model_name} revised ({elapsed:.1f}s)")
+
+            claudeor_delib_task.async_task = asyncio.create_task(run_claudeor_delib())
+            async_tasks.append(claudeor_delib_task.async_task)
+
         # Wait for all tasks with timeout
         if async_tasks:
             done, pending = await asyncio.wait(
@@ -641,4 +757,5 @@ class Council:
             codex=build_agent_response(tasks["codex"], Agent.CODEX) if "codex" in tasks else None,
             gemini=build_agent_response(tasks["gemini"], Agent.GEMINI) if "gemini" in tasks else None,
             opencode=build_agent_response(tasks["opencode"], Agent.OPENCODE) if "opencode" in tasks else None,
+            claudeor=build_agent_response(tasks["claudeor"], Agent.CLAUDEOR) if "claudeor" in tasks else None,
         )

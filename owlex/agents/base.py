@@ -17,6 +17,7 @@ class AgentCommand:
     output_prefix: str = "Output"
     not_found_hint: str | None = None
     stream: bool = True
+    env_overrides: dict[str, str] | None = None  # Environment variable overrides
 
 
 class AgentRunner(ABC):

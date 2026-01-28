@@ -270,6 +270,7 @@ BUILTIN_TEAMS: dict[str, TeamPreset] = {
             "codex": RoleId.SECURITY.value,
             "gemini": RoleId.SKEPTIC.value,
             "opencode": RoleId.ARCHITECT.value,
+            "claudeor": RoleId.DX.value,
         },
     ),
 
@@ -281,6 +282,7 @@ BUILTIN_TEAMS: dict[str, TeamPreset] = {
             "codex": RoleId.MAINTAINER.value,
             "gemini": RoleId.PERFORMANCE.value,
             "opencode": RoleId.TESTING.value,
+            "claudeor": RoleId.DX.value,
         },
     ),
 
@@ -292,6 +294,7 @@ BUILTIN_TEAMS: dict[str, TeamPreset] = {
             "codex": RoleId.ARCHITECT.value,
             "gemini": RoleId.PERFORMANCE.value,
             "opencode": RoleId.MAINTAINER.value,
+            "claudeor": RoleId.DX.value,
         },
     ),
 
@@ -303,6 +306,7 @@ BUILTIN_TEAMS: dict[str, TeamPreset] = {
             "codex": RoleId.SKEPTIC.value,
             "gemini": RoleId.SKEPTIC.value,
             "opencode": RoleId.SKEPTIC.value,
+            "claudeor": RoleId.SKEPTIC.value,
         },
     ),
 
@@ -314,6 +318,19 @@ BUILTIN_TEAMS: dict[str, TeamPreset] = {
             "codex": RoleId.SECURITY.value,
             "gemini": RoleId.PERFORMANCE.value,
             "opencode": RoleId.MAINTAINER.value,
+            "claudeor": RoleId.DX.value,
+        },
+    ),
+
+    "optimal": TeamPreset(
+        id="optimal",
+        name="Optimal Strengths Team",
+        description="Roles matched to each model's inherent strengths",
+        assignments={
+            "codex": RoleId.MAINTAINER.value,      # Deep reasoning for surgical changes
+            "gemini": RoleId.ARCHITECT.value,      # Large context for system-wide view
+            "opencode": RoleId.DX.value,           # Best tone/steerability for docs
+            "claudeor": RoleId.SKEPTIC.value,      # Fast, unconstrained critic
         },
     ),
 }
@@ -508,7 +525,7 @@ class RoleResolver:
     ) -> dict[str, RoleDefinition]:
         """Resolve explicit agent->role mapping."""
         # Validate for unknown agent keys (typos like "codexx")
-        known_agents = {"codex", "gemini", "opencode"}
+        known_agents = {"codex", "gemini", "opencode", "claudeor"}
         unknown_keys = set(mapping.keys()) - known_agents
         if unknown_keys:
             raise ValueError(f"Unknown agent(s) in role mapping: {', '.join(sorted(unknown_keys))}")
