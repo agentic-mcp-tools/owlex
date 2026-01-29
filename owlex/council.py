@@ -468,6 +468,18 @@ class Council:
         self.log("Round 2: deliberation phase...")
         excluded = config.council.exclude_agents
 
+        # Skip agents that failed/timed out in R1 - no point retrying
+        r1_failed = set()
+        for agent_name, r1_result in [
+            ("codex", round_1.codex),
+            ("gemini", round_1.gemini),
+            ("opencode", round_1.opencode),
+            ("claudeor", round_1.claudeor),
+        ]:
+            if r1_result and r1_result.status == "failed":
+                r1_failed.add(agent_name)
+                self.log(f"Skipping {agent_name} in R2 (failed in R1)")
+
         # Get explicit session IDs from R1 (Option A)
         # If session_id is None, we fall back to exec mode
         codex_session = round_1.codex.session_id if round_1.codex else None
@@ -493,7 +505,7 @@ class Council:
         # If session ID is None (R1 failed or parsing failed), fall back to exec mode
         # Role prefixes (sticky roles) are injected to maintain perspective
 
-        if "codex" not in excluded:
+        if "codex" not in excluded and "codex" not in r1_failed:
             codex_role = roles.get("codex")
             # Build prompt for resume mode (no original needed - agent has R1 context)
             codex_delib_prompt_resume = build_deliberation_prompt_with_role(
@@ -554,7 +566,7 @@ class Council:
             codex_delib_task.async_task = asyncio.create_task(run_codex_delib())
             async_tasks.append(codex_delib_task.async_task)
 
-        if "gemini" not in excluded:
+        if "gemini" not in excluded and "gemini" not in r1_failed:
             gemini_role = roles.get("gemini")
             # Build prompt for resume mode (no original needed - agent has R1 context)
             gemini_delib_prompt_resume = build_deliberation_prompt_with_role(
@@ -613,7 +625,7 @@ class Council:
             gemini_delib_task.async_task = asyncio.create_task(run_gemini_delib())
             async_tasks.append(gemini_delib_task.async_task)
 
-        if "opencode" not in excluded:
+        if "opencode" not in excluded and "opencode" not in r1_failed:
             opencode_role = roles.get("opencode")
             # Build prompt for resume mode (no original needed - agent has R1 context)
             opencode_delib_prompt_resume = build_deliberation_prompt_with_role(
@@ -672,7 +684,7 @@ class Council:
             opencode_delib_task.async_task = asyncio.create_task(run_opencode_delib())
             async_tasks.append(opencode_delib_task.async_task)
 
-        if "claudeor" not in excluded and config.claudeor.api_key:
+        if "claudeor" not in excluded and config.claudeor.api_key and "claudeor" not in r1_failed:
             claudeor_role = roles.get("claudeor")
             # Build prompt for resume mode (no original needed - agent has R1 context)
             claudeor_delib_prompt_resume = build_deliberation_prompt_with_role(
