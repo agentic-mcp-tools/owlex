@@ -15,7 +15,7 @@ from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.session import ServerSession
 
 from .models import TaskResponse, ErrorCode, Agent
-from .engine import engine, DEFAULT_TIMEOUT, codex_runner, gemini_runner, opencode_runner, claudeor_runner
+from .engine import engine, DEFAULT_TIMEOUT, codex_runner, gemini_runner, opencode_runner, claudeor_runner, grok_runner
 from .council import Council
 from .config import config
 from .roles import get_resolver
@@ -68,6 +68,11 @@ def _get_opencode_model() -> str:
     return model if model else "openrouter/anthropic/claude-sonnet-4"
 
 
+def _get_grok_model() -> str:
+    """Get Grok model from config."""
+    return config.grok.model
+
+
 @mcp.resource("owlex://agents")
 async def get_agents() -> str:
     """List available agents and their configuration."""
@@ -107,6 +112,16 @@ async def get_agents() -> str:
             "description": "Alternative perspective, configurable models",
             "config": {
                 "agent_mode": config.opencode.agent,
+            }
+        },
+        "grok": {
+            "available": "grok" not in excluded,
+            "cli_version": opencode_ver,  # Uses OpenCode CLI
+            "model": _get_grok_model(),
+            "code_model": config.grok.code_model,
+            "description": "Deliberate contrarian via xAI/Grok, less aligned perspective",
+            "config": {
+                "agent_mode": config.grok.agent,
             }
         },
     }
@@ -505,6 +520,98 @@ async def resume_claudeor_session(
         task_id=task.task_id,
         status=task.status,
         message=f"Claude OpenRouter{model_info} resume started{' (continuing last session)' if use_continue else f' for session {session_id}'}. Use wait_for_task to get result.",
+    ).model_dump()
+
+
+# === Grok Session Tools ===
+
+@mcp.tool()
+async def start_grok_session(
+    ctx: Context[ServerSession, None],
+    prompt: str = Field(description="The question or request to send"),
+    working_directory: str | None = Field(default=None, description="Working directory for Grok context"),
+    for_coding: bool = Field(default=False, description="Use coding model (grok-code-fast-1) instead of reasoning model"),
+) -> dict:
+    """
+    Start a new Grok session via OpenCode with xAI backend.
+
+    Uses OpenCode CLI with xAI/Grok models. Requires XAI_API_KEY environment variable.
+
+    Two model options:
+    - for_coding=False (default): Uses GROK_MODEL (default: xai/grok-4-1-fast-reasoning) for reasoning/deliberation
+    - for_coding=True: Uses GROK_CODE_MODEL (default: xai/grok-code-fast-1) for coding tasks
+    """
+    if not prompt or not prompt.strip():
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump()
+
+    working_directory, error = _validate_working_directory(working_directory)
+    if error:
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump()
+
+    task = engine.create_task(
+        command=f"{Agent.GROK.value}_exec",
+        args={"prompt": prompt.strip(), "working_directory": working_directory, "for_coding": for_coding},
+        context=ctx,
+    )
+
+    task.async_task = asyncio.create_task(engine.run_agent(
+        task, grok_runner, mode="exec",
+        prompt=prompt.strip(), working_directory=working_directory, for_coding=for_coding
+    ))
+
+    model = config.grok.code_model if for_coding else config.grok.model
+    return TaskResponse(
+        success=True,
+        task_id=task.task_id,
+        status=task.status,
+        message=f"Grok session started ({model}). Use wait_for_task to get result.",
+    ).model_dump()
+
+
+@mcp.tool()
+async def resume_grok_session(
+    ctx: Context[ServerSession, None],
+    prompt: str = Field(description="The question or request to send to the resumed session"),
+    session_id: str | None = Field(default=None, description="Session ID to resume (uses --continue if not provided)"),
+    working_directory: str | None = Field(default=None, description="Working directory for Grok context"),
+    for_coding: bool = Field(default=False, description="Use coding model (grok-code-fast-1) instead of reasoning model"),
+) -> dict:
+    """Resume an existing Grok session with full conversation history."""
+    if not prompt or not prompt.strip():
+        return TaskResponse(success=False, error="'prompt' parameter is required.", error_code=ErrorCode.INVALID_ARGS).model_dump()
+
+    working_directory, error = _validate_working_directory(working_directory)
+    if error:
+        return TaskResponse(success=False, error=error, error_code=ErrorCode.INVALID_ARGS).model_dump()
+
+    use_continue = not session_id or not session_id.strip()
+    session_ref = "--continue" if use_continue else session_id.strip()
+
+    # Validate session ID if provided
+    if not use_continue and not grok_runner.validate_session_id(session_ref):
+        return TaskResponse(
+            success=False,
+            error=f"Invalid session_id: '{session_id}' - contains disallowed characters",
+            error_code=ErrorCode.INVALID_ARGS
+        ).model_dump()
+
+    task = engine.create_task(
+        command=f"{Agent.GROK.value}_resume",
+        args={"session_id": session_ref, "prompt": prompt.strip(), "working_directory": working_directory, "for_coding": for_coding},
+        context=ctx,
+    )
+
+    task.async_task = asyncio.create_task(engine.run_agent(
+        task, grok_runner, mode="resume",
+        prompt=prompt.strip(), session_ref=session_ref, working_directory=working_directory, for_coding=for_coding
+    ))
+
+    model = config.grok.code_model if for_coding else config.grok.model
+    return TaskResponse(
+        success=True,
+        task_id=task.task_id,
+        status=task.status,
+        message=f"Grok resume started ({model}){' (continuing last session)' if use_continue else f' for session {session_id}'}. Use wait_for_task to get result.",
     ).model_dump()
 
 
@@ -933,6 +1040,340 @@ async def council_ask(
     }
 
     return response
+
+
+# === Liza Tools (Peer-Supervised Coding) ===
+
+# Module-level Liza orchestrators (per working directory)
+_liza_orchestrators: dict[str, "LizaOrchestrator"] = {}
+
+
+def _get_liza_orchestrator(working_directory: str | None = None) -> "LizaOrchestrator":
+    """Get or create a Liza orchestrator for the working directory."""
+    from .liza import LizaOrchestrator, LizaConfig
+
+    wd = working_directory or os.getcwd()
+    if wd not in _liza_orchestrators:
+        config_obj = LizaConfig(
+            working_directory=wd,
+            reviewers=["codex", "gemini"],  # Default reviewers
+        )
+        orchestrator = LizaOrchestrator(config=config_obj)
+
+        # Set up the reviewer runner to use owlex agents
+        async def run_reviewer(agent: str, prompt: str, working_dir: str | None, timeout: int) -> str | None:
+            """Run a reviewer agent via owlex."""
+            runner_map = {
+                "codex": codex_runner,
+                "gemini": gemini_runner,
+                "opencode": opencode_runner,
+                "grok": grok_runner,
+            }
+            runner = runner_map.get(agent)
+            if runner is None:
+                return None
+
+            task = engine.create_task(
+                command=f"liza_review_{agent}",
+                args={"prompt": prompt, "working_directory": working_dir},
+                context=None,
+            )
+
+            await engine.run_agent(
+                task, runner, mode="exec",
+                prompt=prompt, working_directory=working_dir,
+                **({"enable_search": False} if agent == "codex" else {})
+            )
+
+            if task.status == "completed":
+                return task.result
+            return None
+
+        orchestrator.set_reviewer_runner(run_reviewer)
+        _liza_orchestrators[wd] = orchestrator
+
+    return _liza_orchestrators[wd]
+
+
+@mcp.tool()
+async def liza_start(
+    ctx: Context[ServerSession, None],
+    task_description: str = Field(description="Description of what Claude should implement"),
+    reviewers: list[str] | None = Field(default=None, description="Reviewer agents (default: ['codex', 'gemini'])"),
+    max_iterations: int = Field(default=5, description="Maximum coder-reviewer cycles"),
+    done_when: str | None = Field(default=None, description="Optional completion criteria"),
+    working_directory: str | None = Field(default=None, description="Working directory for the task"),
+) -> dict:
+    """
+    Start a Liza peer-reviewed coding task.
+
+    Creates a task for Claude (the coder) to implement. After Claude implements,
+    use liza_submit to send the implementation for review by Codex/Gemini.
+
+    Architecture:
+    - Claude Code = Coder (trusted, actually writes code)
+    - Codex/Gemini/OpenCode/Grok = Reviewers (examine and provide feedback)
+
+    Flow:
+    1. liza_start → Creates task, returns task_id
+    2. Claude implements the task (using Write/Edit/Bash tools)
+    3. liza_submit → Sends to reviewers, returns verdicts
+    4. If REJECT: Claude fixes based on feedback, goto step 3
+    5. If APPROVE: Done!
+    """
+    if not task_description or not task_description.strip():
+        return {"success": False, "error": "'task_description' is required."}
+
+    working_directory, error = _validate_working_directory(working_directory)
+    if error:
+        return {"success": False, "error": error}
+
+    try:
+        orchestrator = _get_liza_orchestrator(working_directory)
+
+        # Update reviewers if specified
+        if reviewers:
+            orchestrator.config.reviewers = reviewers
+
+        task = orchestrator.create_task(
+            description=task_description.strip(),
+            reviewers=reviewers,
+            max_iterations=max_iterations,
+            done_when=done_when,
+        )
+
+        return {
+            "success": True,
+            "task_id": task.id,
+            "message": f"Task created. Claude should now implement: {task_description[:100]}...",
+            "instructions": (
+                "1. Implement the task using Write/Edit/Bash tools\n"
+                "2. When done, call liza_submit with your implementation summary\n"
+                "3. Reviewers will examine and provide feedback\n"
+                "4. If rejected, fix issues and submit again"
+            ),
+            "task": {
+                "id": task.id,
+                "description": task.description,
+                "reviewers": task.reviewers,
+                "max_iterations": task.max_iterations,
+                "done_when": task.done_when,
+            },
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def liza_submit(
+    ctx: Context[ServerSession, None],
+    task_id: str = Field(description="Task ID from liza_start"),
+    implementation_summary: str = Field(description="Summary of what was implemented (for reviewers)"),
+    working_directory: str | None = Field(default=None, description="Working directory"),
+) -> dict:
+    """
+    Submit Claude's implementation for review by Codex/Gemini.
+
+    After Claude implements the task, call this to send it for review.
+    Reviewers will examine the code and return APPROVE or REJECT with feedback.
+
+    If REJECT: Claude should fix the issues and call liza_submit again.
+    If APPROVE: The task is complete!
+    """
+    if not task_id or not task_id.strip():
+        return {"success": False, "error": "'task_id' is required."}
+    if not implementation_summary or not implementation_summary.strip():
+        return {"success": False, "error": "'implementation_summary' is required."}
+
+    working_directory, error = _validate_working_directory(working_directory)
+    if error:
+        return {"success": False, "error": error}
+
+    try:
+        orchestrator = _get_liza_orchestrator(working_directory)
+
+        # Check task exists and is in right state
+        task = orchestrator.blackboard.get_task(task_id.strip())
+        if task is None:
+            return {"success": False, "error": f"Task '{task_id}' not found."}
+
+        # Check iteration limit
+        if task.iteration >= task.max_iterations:
+            return {
+                "success": False,
+                "error": f"Max iterations ({task.max_iterations}) reached. Task blocked.",
+                "task_status": orchestrator.get_task_status(task_id),
+            }
+
+        # Submit for review
+        result = await orchestrator.submit_for_review(
+            task_id=task_id.strip(),
+            implementation_summary=implementation_summary.strip(),
+        )
+
+        if result.all_approved:
+            orchestrator.mark_approved(task_id)
+            return {
+                "success": True,
+                "approved": True,
+                "message": "All reviewers APPROVED! Task complete.",
+                "review_summary": {
+                    "iteration": result.iteration,
+                    "reviews": {
+                        reviewer: {
+                            "status": v.status.value,
+                            "confidence": v.confidence,
+                        }
+                        for reviewer, v in result.reviews.items()
+                    },
+                },
+            }
+        else:
+            # Prepare for next iteration
+            orchestrator.prepare_for_iteration(task_id, result.merged_feedback)
+            task = orchestrator.blackboard.get_task(task_id)
+
+            return {
+                "success": True,
+                "approved": False,
+                "message": "Review REJECTED. Please address the feedback and submit again.",
+                "iteration": task.iteration,
+                "remaining_iterations": task.max_iterations - task.iteration,
+                "feedback": result.merged_feedback,
+                "issues_found": result.issues_found,
+                "review_summary": {
+                    "reviews": {
+                        reviewer: {
+                            "status": v.status.value,
+                            "confidence": v.confidence,
+                            "feedback_preview": (v.feedback[:200] + "...") if v.feedback and len(v.feedback) > 200 else v.feedback,
+                        }
+                        for reviewer, v in result.reviews.items()
+                    },
+                },
+                "instructions": (
+                    "1. Read the feedback above carefully\n"
+                    "2. Fix the identified issues\n"
+                    "3. Do NOT introduce unrelated changes\n"
+                    "4. Call liza_submit again with updated summary"
+                ),
+            }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def liza_status(
+    task_id: str = Field(description="Task ID to check"),
+    working_directory: str | None = Field(default=None, description="Working directory"),
+) -> dict:
+    """
+    Get the current status of a Liza task.
+
+    Returns task details including status, iteration count, reviewers, and any feedback.
+    """
+    if not task_id or not task_id.strip():
+        return {"success": False, "error": "'task_id' is required."}
+
+    working_directory, error = _validate_working_directory(working_directory)
+    if error:
+        return {"success": False, "error": error}
+
+    try:
+        orchestrator = _get_liza_orchestrator(working_directory)
+        status = orchestrator.get_task_status(task_id.strip())
+
+        if status is None:
+            return {"success": False, "error": f"Task '{task_id}' not found."}
+
+        return {
+            "success": True,
+            "task": status,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def liza_feedback(
+    task_id: str = Field(description="Task ID to get feedback for"),
+    working_directory: str | None = Field(default=None, description="Working directory"),
+) -> dict:
+    """
+    Get the latest reviewer feedback for a Liza task.
+
+    Returns formatted feedback that Claude should address before resubmitting.
+    """
+    if not task_id or not task_id.strip():
+        return {"success": False, "error": "'task_id' is required."}
+
+    working_directory, error = _validate_working_directory(working_directory)
+    if error:
+        return {"success": False, "error": error}
+
+    try:
+        orchestrator = _get_liza_orchestrator(working_directory)
+        feedback = orchestrator.get_feedback_for_claude(task_id.strip())
+
+        if feedback is None:
+            return {
+                "success": True,
+                "has_feedback": False,
+                "message": "No feedback available (task may be approved or not yet reviewed).",
+            }
+
+        return {
+            "success": True,
+            "has_feedback": True,
+            "feedback": feedback,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.resource("owlex://liza/blackboard")
+def liza_blackboard_resource() -> str:
+    """View the current Liza blackboard state."""
+    try:
+        orchestrator = _get_liza_orchestrator()
+        if not orchestrator.blackboard.exists():
+            return "No Liza blackboard found. Use liza_start to create a task."
+
+        state = orchestrator.blackboard.read()
+        lines = [
+            "# Liza Blackboard",
+            f"**Goal:** {state.goal}",
+            f"**Created:** {state.created_at}",
+            f"**Updated:** {state.updated_at}",
+            "",
+            "## Tasks",
+        ]
+
+        for task in state.tasks:
+            status_emoji = {
+                "APPROVED": "✅",
+                "REJECTED": "❌",
+                "WORKING": "🔨",
+                "IN_REVIEW": "👀",
+                "BLOCKED": "🚫",
+            }.get(task.status.value, "📋")
+
+            lines.append(f"### {task.id} {status_emoji} {task.status.value}")
+            lines.append(f"**Description:** {task.description[:100]}...")
+            lines.append(f"**Coder:** {task.coder} | **Reviewers:** {', '.join(task.reviewers)}")
+            lines.append(f"**Iteration:** {task.iteration}/{task.max_iterations}")
+            if task.merged_feedback:
+                lines.append(f"**Has Feedback:** Yes")
+            lines.append("")
+
+        if state.log:
+            lines.append("## Recent Log")
+            for entry in state.log[-10:]:
+                lines.append(f"- {entry}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error reading blackboard: {e}"
 
 
 def main():

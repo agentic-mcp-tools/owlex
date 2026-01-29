@@ -41,6 +41,15 @@ class ClaudeORConfig:
 
 
 @dataclass(frozen=True)
+class GrokConfig:
+    """Configuration for Grok via xAI/OpenCode integration."""
+    model: str = "xai/grok-4-1-fast-reasoning"  # Default reasoning model
+    code_model: str = "xai/grok-code-fast-1"  # Default coding model
+    agent: str = "plan"  # Agent to use - "plan" (read-only) or "build" (full access)
+    clean_output: bool = True
+
+
+@dataclass(frozen=True)
 class CouncilConfig:
     """Configuration for council orchestration."""
     exclude_agents: frozenset[str] = frozenset()  # Agents to exclude from council
@@ -55,6 +64,7 @@ class OwlexConfig:
     gemini: GeminiConfig
     opencode: OpenCodeConfig
     claudeor: ClaudeORConfig
+    grok: GrokConfig
     council: CouncilConfig
     default_timeout: int = 300
 
@@ -97,6 +107,13 @@ def load_config() -> OwlexConfig:
         clean_output=os.environ.get("CLAUDEOR_CLEAN_OUTPUT", "true").lower() == "true",
     )
 
+    grok = GrokConfig(
+        model=os.environ.get("GROK_MODEL", "xai/grok-4-1-fast-reasoning"),
+        code_model=os.environ.get("GROK_CODE_MODEL", "xai/grok-code-fast-1"),
+        agent=os.environ.get("GROK_AGENT", "plan"),
+        clean_output=os.environ.get("GROK_CLEAN_OUTPUT", "true").lower() == "true",
+    )
+
     # Parse council exclude agents (comma-separated list)
     exclude_raw = os.environ.get("COUNCIL_EXCLUDE_AGENTS", "")
     exclude_agents = frozenset(
@@ -128,6 +145,7 @@ def load_config() -> OwlexConfig:
         gemini=gemini,
         opencode=opencode,
         claudeor=claudeor,
+        grok=grok,
         council=council,
         default_timeout=timeout,
     )
