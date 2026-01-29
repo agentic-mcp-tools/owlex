@@ -19,6 +19,10 @@ Different AI models have different strengths and blind spots. Owlex lets you que
 
 Use it for architecture decisions, debugging tricky issues, or when you want more confidence than a single model provides. Not for every question - for the ones that matter.
 
+### Data Flow
+
+![Council data flow](media/council_flow.gif)
+
 ## Installation
 
 ```bash
