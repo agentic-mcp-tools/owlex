@@ -88,6 +88,60 @@ Council runs in the background. Start a query, keep working, check results later
 - Exclude agents with `COUNCIL_EXCLUDE_AGENTS` to control costs
 - Use council for important decisions, not every question
 
+## Liza: Peer-Supervised Coding
+
+**External validation for production-quality code.**
+
+Liza implements a peer-review loop where Claude (the coder) implements tasks and external agents (Codex, Gemini, Grok) review with binding verdicts. Based on [liza-mas/liza](https://github.com/liza-mas/liza).
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│          Claude Code (Coder + Orchestrator)      │
+└─────────────────────────────────────────────────┘
+                        │
+                [implementation]
+                        │
+          ┌─────────────┼─────────────┐
+          ▼             ▼             ▼
+    ┌─────────┐   ┌─────────┐   ┌─────────┐
+    │  Codex  │   │ Gemini  │   │  Grok   │
+    │(Reviewer│   │(Reviewer│   │(Reviewer│
+    └─────────┘   └─────────┘   └─────────┘
+```
+
+### Workflow
+
+```
+1. liza_start("Add rate limiting") → task_id
+2. Claude implements (Write/Edit/Bash)
+3. liza_submit(task_id, summary) → reviewers examine
+   - Codex: REJECT - "Missing IP-based limiting"
+   - Gemini: APPROVE
+4. Claude fixes based on feedback
+5. liza_submit again → all APPROVE
+6. Done! ✅
+```
+
+### MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `liza_start` | Create a task for Claude to implement |
+| `liza_submit` | Submit implementation for review |
+| `liza_status` | Check task status |
+| `liza_feedback` | Get feedback to address |
+
+### Key Principles
+
+- **External validation**: Claude cannot self-approve
+- **Critique mode**: Reviewers actively find bugs, security issues, edge cases
+- **Multi-reviewer**: Different agents catch different issues
+- **Iteration**: Loop until all reviewers approve or max iterations
+
+---
+
 ## When to Use Each Agent
 
 | Agent | Strengths |
@@ -95,4 +149,5 @@ Council runs in the background. Start a query, keep working, check results later
 | **Codex (gpt5.2-codex)** | Deep reasoning, code review, bug finding |
 | **Gemini** | 1M context window, multimodal, large codebases |
 | **OpenCode** | Alternative perspective, configurable models |
+| **Grok** | Deliberate contrarian, less aligned perspective |
 | **Claude** | Complex multi-step implementation, synthesis |
