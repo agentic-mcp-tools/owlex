@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from .config import config
-from .engine import engine, build_agent_response, codex_runner, gemini_runner, opencode_runner, claudeor_runner
+from .engine import engine, build_agent_response, codex_runner, gemini_runner, opencode_runner, claudeor_runner, grok_runner
 from .prompts import inject_role_prefix, build_deliberation_prompt_with_role
 from .roles import RoleSpec, RoleDefinition, RoleResolver, RoleId, get_resolver
 from .models import (
@@ -141,9 +141,12 @@ class Council:
         # Determine which agents to run
         excluded = config.council.exclude_agents
         # Include claudeor only if API key is configured
+        # Include grok (uses XAI_API_KEY via OpenCode, checked at runtime)
         all_agents = ["codex", "gemini", "opencode"]
         if config.claudeor.api_key:
             all_agents.append("claudeor")
+        # Grok is always available if not excluded (XAI_API_KEY checked by OpenCode at runtime)
+        all_agents.append("grok")
         active_agents = [a for a in all_agents if a not in excluded]
 
         # Resolve roles (team parameter is just a string that resolves to a team preset)
@@ -356,6 +359,35 @@ class Council:
             claudeor_task.async_task = asyncio.create_task(run_claudeor())
             async_tasks.append(claudeor_task.async_task)
 
+        if "grok" not in excluded:
+            grok_role = roles.get("grok")
+            grok_prompt = inject_role_prefix(prompt, grok_role)
+
+            grok_task = self._engine.create_task(
+                command=f"council_{Agent.GROK.value}",
+                args={"prompt": grok_prompt, "working_directory": working_directory},
+                context=self.context,
+            )
+            tasks["grok"] = grok_task
+
+            # Capture prompt in closure
+            _grok_prompt = grok_prompt
+
+            async def run_grok():
+                # Clean start for R1 - session ID captured after completion
+                await self._engine.run_agent(
+                    grok_task, grok_runner, mode="exec",
+                    prompt=_grok_prompt, working_directory=working_directory
+                )
+                elapsed = (datetime.now() - round1_start).total_seconds()
+                status = "completed" if grok_task.status == "completed" else "failed"
+                model_name = config.grok.model or "Grok"
+                self.log(f"{model_name} {status} ({elapsed:.1f}s)")
+                await self.notify(f"{model_name} {status} ({elapsed:.1f}s)")
+
+            grok_task.async_task = asyncio.create_task(run_grok())
+            async_tasks.append(grok_task.async_task)
+
         # Wait for all tasks with timeout
         if async_tasks:
             done, pending = await asyncio.wait(
@@ -435,11 +467,25 @@ class Council:
                 self.log("ClaudeOR session ID not found, R2 will use exec mode")
             return session
 
-        codex_session, gemini_session, opencode_session, claudeor_session = await asyncio.gather(
+        async def parse_grok_session():
+            if "grok" not in tasks or tasks["grok"].status != "completed":
+                return None
+            session = await grok_runner.parse_session_id(
+                "", since_mtime=r1_start_mtime, working_directory=working_directory
+            )
+            if session and not grok_runner.validate_session_id(session):
+                self.log(f"Grok session ID validation failed: {session}")
+                return None
+            if not session:
+                self.log("Grok session ID not found, R2 will use exec mode")
+            return session
+
+        codex_session, gemini_session, opencode_session, claudeor_session, grok_session = await asyncio.gather(
             parse_codex_session(),
             parse_gemini_session(),
             parse_opencode_session(),
             parse_claudeor_session(),
+            parse_grok_session(),
         )
 
         return CouncilRound(
@@ -447,6 +493,7 @@ class Council:
             gemini=build_agent_response(tasks["gemini"], Agent.GEMINI, session_id=gemini_session) if "gemini" in tasks else None,
             opencode=build_agent_response(tasks["opencode"], Agent.OPENCODE, session_id=opencode_session) if "opencode" in tasks else None,
             claudeor=build_agent_response(tasks["claudeor"], Agent.CLAUDEOR, session_id=claudeor_session) if "claudeor" in tasks else None,
+            grok=build_agent_response(tasks["grok"], Agent.GROK, session_id=grok_session) if "grok" in tasks else None,
         )
 
     async def _run_round_2(
@@ -475,6 +522,7 @@ class Council:
             ("gemini", round_1.gemini),
             ("opencode", round_1.opencode),
             ("claudeor", round_1.claudeor),
+            ("grok", round_1.grok),
         ]:
             if r1_result and r1_result.status == "failed":
                 r1_failed.add(agent_name)
@@ -486,11 +534,13 @@ class Council:
         gemini_session = round_1.gemini.session_id if round_1.gemini else None
         opencode_session = round_1.opencode.session_id if round_1.opencode else None
         claudeor_session = round_1.claudeor.session_id if round_1.claudeor else None
+        grok_session = round_1.grok.session_id if round_1.grok else None
 
         codex_content = (round_1.codex.content or round_1.codex.error or "(no response)") if round_1.codex else None
         gemini_content = (round_1.gemini.content or round_1.gemini.error or "(no response)") if round_1.gemini else None
         opencode_content = (round_1.opencode.content or round_1.opencode.error or "(no response)") if round_1.opencode else None
         claudeor_content = (round_1.claudeor.content or round_1.claudeor.error or "(no response)") if round_1.claudeor else None
+        grok_content = (round_1.grok.content or round_1.grok.error or "(no response)") if round_1.grok else None
         claude_content = claude_opinion.strip() if claude_opinion else None
 
         round2_start = datetime.now()
@@ -515,6 +565,7 @@ class Council:
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
                 claudeor_answer=claudeor_content,
+                grok_answer=grok_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=False,
@@ -527,6 +578,7 @@ class Council:
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
                 claudeor_answer=claudeor_content,
+                grok_answer=grok_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=True,
@@ -576,6 +628,7 @@ class Council:
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
                 claudeor_answer=claudeor_content,
+                grok_answer=grok_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=False,
@@ -588,6 +641,7 @@ class Council:
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
                 claudeor_answer=claudeor_content,
+                grok_answer=grok_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=True,
@@ -635,6 +689,7 @@ class Council:
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
                 claudeor_answer=claudeor_content,
+                grok_answer=grok_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=False,
@@ -647,6 +702,7 @@ class Council:
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
                 claudeor_answer=claudeor_content,
+                grok_answer=grok_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=True,
@@ -694,6 +750,7 @@ class Council:
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
                 claudeor_answer=claudeor_content,
+                grok_answer=grok_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=False,
@@ -706,6 +763,7 @@ class Council:
                 gemini_answer=gemini_content,
                 opencode_answer=opencode_content,
                 claudeor_answer=claudeor_content,
+                grok_answer=grok_content,
                 claude_answer=claude_content,
                 critique=critique,
                 include_original=True,
@@ -744,6 +802,68 @@ class Council:
             claudeor_delib_task.async_task = asyncio.create_task(run_claudeor_delib())
             async_tasks.append(claudeor_delib_task.async_task)
 
+        if "grok" not in excluded and "grok" not in r1_failed:
+            grok_role = roles.get("grok")
+            # Build prompt for resume mode (no original needed - agent has R1 context)
+            grok_delib_prompt_resume = build_deliberation_prompt_with_role(
+                original_prompt=prompt,
+                role=grok_role,
+                codex_answer=codex_content,
+                gemini_answer=gemini_content,
+                opencode_answer=opencode_content,
+                claudeor_answer=claudeor_content,
+                grok_answer=grok_content,
+                claude_answer=claude_content,
+                critique=critique,
+                include_original=False,
+            )
+            # Build prompt for exec fallback (include original - agent starts fresh)
+            grok_delib_prompt_exec = build_deliberation_prompt_with_role(
+                original_prompt=prompt,
+                role=grok_role,
+                codex_answer=codex_content,
+                gemini_answer=gemini_content,
+                opencode_answer=opencode_content,
+                claudeor_answer=claudeor_content,
+                grok_answer=grok_content,
+                claude_answer=claude_content,
+                critique=critique,
+                include_original=True,
+            )
+
+            grok_delib_task = self._engine.create_task(
+                command=f"council_{Agent.GROK.value}_delib",
+                args={"prompt": grok_delib_prompt_resume, "working_directory": working_directory},
+                context=self.context,
+            )
+            tasks["grok"] = grok_delib_task
+
+            # Capture session and prompts in closure
+            _grok_session = grok_session
+            _grok_delib_prompt_resume = grok_delib_prompt_resume
+            _grok_delib_prompt_exec = grok_delib_prompt_exec
+
+            async def run_grok_delib():
+                # Resume with explicit session ID if available, otherwise exec with full context
+                if _grok_session:
+                    await self._engine.run_agent(
+                        grok_delib_task, grok_runner, mode="resume",
+                        session_ref=_grok_session,
+                        prompt=_grok_delib_prompt_resume, working_directory=working_directory
+                    )
+                else:
+                    await self._engine.run_agent(
+                        grok_delib_task, grok_runner, mode="exec",
+                        prompt=_grok_delib_prompt_exec, working_directory=working_directory
+                    )
+                elapsed = (datetime.now() - round2_start).total_seconds()
+                model_name = config.grok.model or "Grok"
+                self.log(f"{model_name} revised ({elapsed:.1f}s)")
+                await self.notify(f"{model_name} revised ({elapsed:.1f}s)")
+
+            grok_delib_task.async_task = asyncio.create_task(run_grok_delib())
+            async_tasks.append(grok_delib_task.async_task)
+
         # Wait for all tasks with timeout
         if async_tasks:
             done, pending = await asyncio.wait(
@@ -770,4 +890,5 @@ class Council:
             gemini=build_agent_response(tasks["gemini"], Agent.GEMINI) if "gemini" in tasks else None,
             opencode=build_agent_response(tasks["opencode"], Agent.OPENCODE) if "opencode" in tasks else None,
             claudeor=build_agent_response(tasks["claudeor"], Agent.CLAUDEOR) if "claudeor" in tasks else None,
+            grok=build_agent_response(tasks["grok"], Agent.GROK) if "grok" in tasks else None,
         )

@@ -36,6 +36,7 @@ class Agent(str, Enum):
     GEMINI = "gemini"
     OPENCODE = "opencode"
     CLAUDEOR = "claudeor"  # Claude Code via OpenRouter
+    GROK = "grok"  # Grok via xAI
 
 
 @dataclass
@@ -103,6 +104,7 @@ class CouncilRound(BaseModel):
     gemini: AgentResponse | None = None
     opencode: AgentResponse | None = None
     claudeor: AgentResponse | None = None  # Claude Code via OpenRouter
+    grok: AgentResponse | None = None  # Grok via xAI
 
 
 class CouncilMetadata(BaseModel):
