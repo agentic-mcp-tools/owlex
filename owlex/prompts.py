@@ -42,6 +42,7 @@ def build_deliberation_prompt(
     gemini_answer: str | None = None,
     opencode_answer: str | None = None,
     claudeor_answer: str | None = None,
+    aichat_answer: str | None = None,
     claude_answer: str | None = None,
     critique: bool = False,
     include_original: bool = False,
@@ -96,6 +97,9 @@ def build_deliberation_prompt(
     if claudeor_answer:
         parts.extend(["", "CLAUDE (OPENROUTER)'S ANSWER:", claudeor_answer])
 
+    if aichat_answer:
+        parts.extend(["", "AICHAT'S ANSWER:", aichat_answer])
+
     parts.extend(["", instruction])
 
     return "\n".join(parts)
@@ -126,6 +130,7 @@ def build_deliberation_prompt_with_role(
     gemini_answer: str | None = None,
     opencode_answer: str | None = None,
     claudeor_answer: str | None = None,
+    aichat_answer: str | None = None,
     claude_answer: str | None = None,
     critique: bool = False,
     include_original: bool = False,
@@ -157,6 +162,7 @@ def build_deliberation_prompt_with_role(
         gemini_answer=gemini_answer,
         opencode_answer=opencode_answer,
         claudeor_answer=claudeor_answer,
+        aichat_answer=aichat_answer,
         claude_answer=claude_answer,
         critique=critique,
         include_original=include_original,

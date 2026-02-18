@@ -8,6 +8,7 @@ import pytest
 from owlex.agents.codex import CodexRunner
 from owlex.agents.gemini import GeminiRunner
 from owlex.agents.opencode import OpenCodeRunner
+from owlex.agents.aichat import AiChatRunner
 
 
 class TestCodexRunner:
@@ -473,6 +474,120 @@ class TestOpenCodeRunner:
             assert "--dangerous" in cmd.command
 
 
+class TestAiChatRunner:
+    """Tests for AiChat CLI command construction."""
+
+    @pytest.fixture
+    def runner(self):
+        return AiChatRunner()
+
+    def test_exec_basic_command(self, runner):
+        """Should build basic exec command."""
+        with patch("owlex.agents.aichat.config") as mock_config:
+            mock_config.aichat.model = None
+
+            cmd = runner.build_exec_command(prompt="Hello")
+
+            assert cmd.command[0] == "aichat"
+            assert "-s" in cmd.command  # Session flag
+            assert cmd.prompt == "Hello"  # Prompt via stdin
+            assert cmd.output_prefix == "AiChat Output"
+            assert cmd.stream is True
+
+    def test_exec_with_model(self, runner):
+        """Should add -m flag when model is configured."""
+        with patch("owlex.agents.aichat.config") as mock_config:
+            mock_config.aichat.model = "openai:gpt-4o"
+
+            cmd = runner.build_exec_command(prompt="Hello")
+
+            assert "-m" in cmd.command
+            idx = cmd.command.index("-m")
+            assert cmd.command[idx + 1] == "openai:gpt-4o"
+
+    def test_exec_without_model(self, runner):
+        """Should not include -m flag when no model configured."""
+        with patch("owlex.agents.aichat.config") as mock_config:
+            mock_config.aichat.model = None
+
+            cmd = runner.build_exec_command(prompt="Hello")
+
+            assert "-m" not in cmd.command
+
+    def test_exec_with_working_directory(self, runner):
+        """Should set cwd for working directory."""
+        with patch("owlex.agents.aichat.config") as mock_config:
+            mock_config.aichat.model = None
+
+            cmd = runner.build_exec_command(
+                prompt="Hello",
+                working_directory="/path/to/dir"
+            )
+
+            assert cmd.cwd == "/path/to/dir"
+
+    def test_exec_generates_session_name(self, runner):
+        """Should generate a unique session name with owlex- prefix."""
+        with patch("owlex.agents.aichat.config") as mock_config:
+            mock_config.aichat.model = None
+
+            cmd = runner.build_exec_command(prompt="Hello")
+
+            idx = cmd.command.index("-s")
+            session_name = cmd.command[idx + 1]
+            assert session_name.startswith("owlex-")
+
+    def test_resume_with_session(self, runner):
+        """Should resume with the provided session name."""
+        with patch("owlex.agents.aichat.config") as mock_config:
+            mock_config.aichat.model = None
+
+            cmd = runner.build_resume_command(
+                session_ref="owlex-abc123",
+                prompt="Continue"
+            )
+
+            assert "-s" in cmd.command
+            idx = cmd.command.index("-s")
+            assert cmd.command[idx + 1] == "owlex-abc123"
+            assert cmd.prompt == "Continue"  # Prompt via stdin
+            assert cmd.stream is False  # Resume uses non-streaming
+
+    def test_resume_rejects_flag_injection(self, runner):
+        """Should reject session_ref starting with dash to prevent flag injection."""
+        with patch("owlex.agents.aichat.config") as mock_config:
+            mock_config.aichat.model = None
+
+            with pytest.raises(ValueError) as exc_info:
+                runner.build_resume_command(
+                    session_ref="--malicious-flag",
+                    prompt="Hello"
+                )
+
+            assert "cannot start with '-'" in str(exc_info.value)
+
+    def test_not_found_hint(self, runner):
+        """Should include helpful installation hint."""
+        with patch("owlex.agents.aichat.config") as mock_config:
+            mock_config.aichat.model = None
+
+            cmd = runner.build_exec_command(prompt="Hello")
+
+            assert "aichat" in cmd.not_found_hint
+            assert "github.com" in cmd.not_found_hint
+
+    def test_exec_handles_dash_prompt(self, runner):
+        """Should use stdin to prevent prompts being parsed as flags."""
+        with patch("owlex.agents.aichat.config") as mock_config:
+            mock_config.aichat.model = None
+
+            cmd = runner.build_exec_command(prompt="-malicious prompt")
+
+            # Prompt should be passed via stdin, not in command
+            assert "-malicious prompt" not in cmd.command
+            assert cmd.prompt == "-malicious prompt"
+
+
 class TestAgentInterface:
     """Tests for AgentRunner interface compliance."""
 
@@ -491,6 +606,11 @@ class TestAgentInterface:
         runner = OpenCodeRunner()
         assert runner.name == "opencode"
 
+    def test_aichat_has_name(self):
+        """AiChat runner should have name property."""
+        runner = AiChatRunner()
+        assert runner.name == "aichat"
+
     def test_codex_has_output_cleaner(self):
         """Codex runner should provide output cleaner."""
         runner = CodexRunner()
@@ -506,5 +626,11 @@ class TestAgentInterface:
     def test_opencode_has_output_cleaner(self):
         """OpenCode runner should provide output cleaner."""
         runner = OpenCodeRunner()
+        cleaner = runner.get_output_cleaner()
+        assert callable(cleaner)
+
+    def test_aichat_has_output_cleaner(self):
+        """AiChat runner should provide output cleaner."""
+        runner = AiChatRunner()
         cleaner = runner.get_output_cleaner()
         assert callable(cleaner)

@@ -36,6 +36,7 @@ class Agent(str, Enum):
     GEMINI = "gemini"
     OPENCODE = "opencode"
     CLAUDEOR = "claudeor"  # Claude Code via OpenRouter
+    AICHAT = "aichat"  # aichat multi-provider CLI
 
 
 @dataclass
@@ -103,6 +104,7 @@ class CouncilRound(BaseModel):
     gemini: AgentResponse | None = None
     opencode: AgentResponse | None = None
     claudeor: AgentResponse | None = None  # Claude Code via OpenRouter
+    aichat: AgentResponse | None = None  # aichat multi-provider CLI
 
 
 class CouncilMetadata(BaseModel):

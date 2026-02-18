@@ -41,6 +41,13 @@ class ClaudeORConfig:
 
 
 @dataclass(frozen=True)
+class AiChatConfig:
+    """Configuration for aichat CLI integration."""
+    model: str | None = None  # Model name (e.g., openai:gpt-4o, claude:claude-sonnet-4)
+    clean_output: bool = True
+
+
+@dataclass(frozen=True)
 class CouncilConfig:
     """Configuration for council orchestration."""
     exclude_agents: frozenset[str] = frozenset()  # Agents to exclude from council
@@ -55,6 +62,7 @@ class OwlexConfig:
     gemini: GeminiConfig
     opencode: OpenCodeConfig
     claudeor: ClaudeORConfig
+    aichat: AiChatConfig
     council: CouncilConfig
     default_timeout: int = 300
 
@@ -97,6 +105,11 @@ def load_config() -> OwlexConfig:
         clean_output=os.environ.get("CLAUDEOR_CLEAN_OUTPUT", "true").lower() == "true",
     )
 
+    aichat = AiChatConfig(
+        model=os.environ.get("AICHAT_MODEL") or None,
+        clean_output=os.environ.get("AICHAT_CLEAN_OUTPUT", "true").lower() == "true",
+    )
+
     # Parse council exclude agents (comma-separated list)
     exclude_raw = os.environ.get("COUNCIL_EXCLUDE_AGENTS", "")
     exclude_agents = frozenset(
@@ -128,6 +141,7 @@ def load_config() -> OwlexConfig:
         gemini=gemini,
         opencode=opencode,
         claudeor=claudeor,
+        aichat=aichat,
         council=council,
         default_timeout=timeout,
     )

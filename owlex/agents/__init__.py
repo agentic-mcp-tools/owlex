@@ -8,5 +8,6 @@ from .codex import CodexRunner
 from .gemini import GeminiRunner
 from .opencode import OpenCodeRunner
 from .claudeor import ClaudeORRunner
+from .aichat import AiChatRunner
 
-__all__ = ["AgentRunner", "CodexRunner", "GeminiRunner", "OpenCodeRunner", "ClaudeORRunner"]
+__all__ = ["AgentRunner", "CodexRunner", "GeminiRunner", "OpenCodeRunner", "ClaudeORRunner", "AiChatRunner"]
