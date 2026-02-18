@@ -7,7 +7,7 @@
 
 **Get a second opinion without leaving Claude Code.**
 
-Different AI models have different strengths and blind spots. Owlex lets you query Codex, Gemini, and OpenCode directly from Claude Code - and optionally run a structured deliberation where they review each other's answers before Claude synthesizes a final response.
+Different AI models have different strengths and blind spots. Owlex lets you query Codex, Gemini, OpenCode, ClaudeOR, and AiChat directly from Claude Code - and optionally run a structured deliberation where they review each other's answers before Claude synthesizes a final response.
 
 ![Council demo](media/owlex_demo.gif)
 
@@ -77,7 +77,7 @@ Agents can operate with specialist perspectives that shape their analysis:
 council_ask prompt="Review this auth flow" roles={"codex": "security", "gemini": "perf"}
 ```
 
-**Auto-assign from list (in agent order: codex, gemini, opencode):**
+**Auto-assign from list (in agent order: codex, gemini, opencode, claudeor, aichat):**
 ```
 council_ask prompt="Review this code" roles=["security", "skeptic", "maintainer"]
 ```
@@ -86,14 +86,14 @@ council_ask prompt="Review this code" roles=["security", "skeptic", "maintainer"
 
 Predefined role combinations for common scenarios:
 
-| Team | Codex | Gemini | OpenCode | ClaudeOR |
-|------|-------|--------|----------|----------|
-| `security_audit` | security | skeptic | architect | dx |
-| `code_review` | maintainer | perf | testing | dx |
-| `architecture_review` | architect | perf | maintainer | dx |
-| `devil_advocate` | skeptic | skeptic | skeptic | skeptic |
-| `balanced` | security | perf | maintainer | dx |
-| `optimal` | maintainer | architect | dx | skeptic |
+| Team | Codex | Gemini | OpenCode | ClaudeOR | AiChat |
+|------|-------|--------|----------|----------|--------|
+| `security_audit` | security | skeptic | architect | dx | testing |
+| `code_review` | maintainer | perf | testing | dx | security |
+| `architecture_review` | architect | perf | maintainer | dx | skeptic |
+| `devil_advocate` | skeptic | skeptic | skeptic | skeptic | skeptic |
+| `balanced` | security | perf | maintainer | dx | testing |
+| `optimal` | maintainer | architect | dx | skeptic | perf | perf |
 
 ```
 council_ask prompt="Is this design secure?" team="security_audit"
@@ -111,6 +111,8 @@ council_ask prompt="Is this design secure?" team="security_audit"
 | `resume_opencode_session` | Resume with session ID or `--continue` |
 | `start_claudeor_session` | New Claude via OpenRouter session |
 | `resume_claudeor_session` | Resume with session ID or `--continue` |
+| `start_aichat_session` | New AiChat session |
+| `resume_aichat_session` | Resume with session name |
 
 ### Claude Code Skills
 
@@ -147,11 +149,12 @@ Council runs in the background. Start a query, keep working, check results later
 | `OPENCODE_AGENT` | `plan` | `plan` (read-only) or `build` |
 | `OPENROUTER_API_KEY` | `` | OpenRouter API key (enables ClaudeOR agent) |
 | `CLAUDEOR_MODEL` | `` | OpenRouter model for ClaudeOR (e.g., `deepseek/deepseek-v3.2`) |
+| `AICHAT_MODEL` | `` | Model for AiChat (e.g., `openrouter:minimax/minimax-m2.5`) |
 
 ## Cost Notes
 
 - **Codex** and **Gemini** use your existing subscriptions (Claude Max, Google AI Pro, etc.)
-- **OpenCode** uses API tokens
+- **OpenCode** and **AiChat** use API tokens (provider-dependent)
 - Exclude agents with `COUNCIL_EXCLUDE_AGENTS` to control costs
 - Use council for important decisions, not every question
 
@@ -163,4 +166,5 @@ Council runs in the background. Start a query, keep working, check results later
 | **Gemini** | 1M context window, multimodal, large codebases |
 | **OpenCode** | Alternative perspective, configurable models |
 | **ClaudeOR** | Claude Code + OpenRouter (DeepSeek, GPT-4o, etc.) |
+| **AiChat** | Multi-provider (20+ backends), bring-your-own-model flexibility |
 | **Claude** | Complex multi-step implementation, synthesis |
