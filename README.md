@@ -93,7 +93,7 @@ Predefined role combinations for common scenarios:
 | `architecture_review` | architect | perf | maintainer | dx | skeptic |
 | `devil_advocate` | skeptic | skeptic | skeptic | skeptic | skeptic |
 | `balanced` | security | perf | maintainer | dx | testing |
-| `optimal` | maintainer | architect | dx | skeptic | perf | perf |
+| `optimal` | maintainer | architect | dx | skeptic | perf |
 
 ```
 council_ask prompt="Is this design secure?" team="security_audit"
