@@ -3,7 +3,6 @@ Gemini CLI agent runner.
 """
 
 import asyncio
-import hashlib
 import os
 import re
 from pathlib import Path
@@ -13,19 +12,51 @@ from ..config import config
 from .base import AgentRunner, AgentCommand
 
 
-def _get_gemini_project_hash(working_directory: str) -> str:
-    """
-    Compute the project hash that Gemini uses for session storage.
+def _normalize_path(path: str) -> str:
+    """Normalize a path for comparison: expanduser, abspath, normpath."""
+    return os.path.normpath(os.path.abspath(os.path.expanduser(path)))
 
-    Gemini stores sessions in ~/.gemini/tmp/<hash>/chats/
-    The hash is derived from the working directory path.
 
-    Uses os.path.abspath() instead of Path.resolve() to match CLI behavior
-    (resolve() follows symlinks which may produce different paths).
+def _find_gemini_project_dir(working_directory: str) -> Path | None:
     """
-    # Gemini uses SHA256 of the absolute path
-    abs_path = os.path.abspath(working_directory)
-    return hashlib.sha256(abs_path.encode()).hexdigest()
+    Find the Gemini tmp directory that corresponds to the given working directory.
+
+    Gemini CLI stores sessions in ~/.gemini/tmp/<name>/chats/
+    Each project directory contains a .project_root file with the absolute
+    path of the associated project. Scans all subdirectories and reads their
+    .project_root files to find the one matching working_directory.
+
+    Args:
+        working_directory: The project directory to find.
+
+    Returns:
+        Path to the matching project directory, or None if not found.
+    """
+    gemini_tmp = Path.home() / ".gemini" / "tmp"
+    if not gemini_tmp.exists():
+        return None
+
+    normalized_wd = _normalize_path(working_directory)
+
+    try:
+        for subdir in gemini_tmp.iterdir():
+            if not subdir.is_dir():
+                continue
+            project_root_file = subdir / ".project_root"
+            if not project_root_file.exists():
+                continue
+            try:
+                stored_path = project_root_file.read_text().rstrip("\r\n")
+                if not stored_path:
+                    continue
+                if _normalize_path(stored_path) == normalized_wd:
+                    return subdir
+            except (OSError, UnicodeDecodeError):
+                continue
+    except OSError:
+        return None
+
+    return None
 
 
 async def get_gemini_session_for_project(
@@ -37,8 +68,9 @@ async def get_gemini_session_for_project(
     """
     Check if a Gemini session exists for the given project.
 
-    Gemini stores sessions in ~/.gemini/tmp/<hash>/chats/session-*.json
-    We check if a session file exists that was created after since_mtime.
+    Gemini stores sessions in ~/.gemini/tmp/<name>/chats/session-*.json
+    where <name> is identified by reading the .project_root file in each
+    subdirectory to match against the working_directory.
 
     Args:
         working_directory: The project directory to scope to.
@@ -49,37 +81,28 @@ async def get_gemini_session_for_project(
     Returns:
         True if a valid session exists, False otherwise
     """
-    gemini_dir = Path.home() / ".gemini" / "tmp"
-    if not gemini_dir.exists():
-        return False
-
     # Require working_directory for project-scoped session discovery
     # Without it, we could accidentally resume a session from a different project
     if not working_directory:
         return False
 
-    project_hash = _get_gemini_project_hash(working_directory)
-
     for attempt in range(max_retries):
-        project_dirs = [gemini_dir / project_hash]
-
-        for project_dir in project_dirs:
-            if not project_dir.exists():
-                continue
+        # Find project dir inside retry loop: on first run, the directory
+        # may not exist yet if R1 is still writing
+        project_dir = _find_gemini_project_dir(working_directory)
+        if project_dir is not None:
             chats_dir = project_dir / "chats"
-            if not chats_dir.exists():
-                continue
-            try:
-                for session_file in chats_dir.glob("session-*.json"):
-                    try:
-                        mtime = session_file.stat().st_mtime
-                        # Check if session was created after since_mtime
-                        if since_mtime is None or mtime >= since_mtime:
-                            return True
-                    except OSError:
-                        continue
-            except OSError:
-                continue
+            if chats_dir.exists():
+                try:
+                    for session_file in chats_dir.glob("session-*.json"):
+                        try:
+                            mtime = session_file.stat().st_mtime
+                            if since_mtime is None or mtime >= since_mtime:
+                                return True
+                        except OSError:
+                            continue
+                except OSError:
+                    pass
 
         # Retry with delay if no session found
         # Uses asyncio.sleep to avoid blocking the event loop
@@ -187,7 +210,8 @@ class GeminiRunner(AgentRunner):
 
         Note: Gemini's -r flag uses 1-indexed session ordering where 1 is most recent.
         The ordering is chronological within the project's session directory.
-        We verify a session exists for the current project hash before returning "1".
+        We find the project directory by matching .project_root file contents
+        against the working_directory.
 
         Args:
             output: Ignored (Gemini doesn't output session IDs)
@@ -203,7 +227,7 @@ class GeminiRunner(AgentRunner):
             since_mtime=since_mtime,
         ):
             # Return "1" as the session index - it refers to the most recent session
-            # This is project-scoped by Gemini CLI via the directory hash
+            # Project is identified by .project_root file matching
             return "1"
         return None
 

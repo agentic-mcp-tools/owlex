@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from owlex.agents.codex import CodexRunner, get_latest_codex_session
-from owlex.agents.gemini import GeminiRunner, get_gemini_session_for_project, _get_gemini_project_hash
+from owlex.agents.gemini import GeminiRunner, get_gemini_session_for_project, _find_gemini_project_dir
 from owlex.agents.opencode import OpenCodeRunner, get_latest_opencode_session, _get_opencode_project_id
 from owlex.agents.base import AgentRunner
 
@@ -87,21 +87,109 @@ class TestGeminiSessionValidation:
         assert not self.gemini.validate_session_id("-v")
 
 
-class TestProjectHashComputation:
-    """Tests for project hash computation matching CLI behavior."""
+class TestProjectDirectoryDiscovery:
+    """Tests for project directory discovery matching CLI behavior."""
 
-    def test_gemini_hash_uses_abspath(self):
-        """Gemini hash should use os.path.abspath, not resolve()."""
+    def test_gemini_finds_project_dir_by_project_root(self):
+        """Gemini should find project dir by reading .project_root files."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            test_path = os.path.join(tmpdir, "project")
-            os.makedirs(test_path)
+            project_dir = Path(tmpdir) / ".gemini" / "tmp" / "myproject"
+            project_dir.mkdir(parents=True)
+            (project_dir / ".project_root").write_text("/test/project")
 
-            # Verify hash is computed from abspath
-            expected_path = os.path.abspath(test_path)
-            import hashlib
-            expected_hash = hashlib.sha256(expected_path.encode()).hexdigest()
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = _find_gemini_project_dir("/test/project")
+                assert result == project_dir
 
-            assert _get_gemini_project_hash(test_path) == expected_hash
+    def test_gemini_returns_none_for_unknown_project(self):
+        """Should return None when no .project_root matches."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir) / ".gemini" / "tmp" / "other"
+            project_dir.mkdir(parents=True)
+            (project_dir / ".project_root").write_text("/other/project")
+
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = _find_gemini_project_dir("/test/project")
+                assert result is None
+
+    def test_gemini_skips_dirs_without_project_root(self):
+        """Should skip directories that don't have a .project_root file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Dir without .project_root (like 'bin')
+            bin_dir = Path(tmpdir) / ".gemini" / "tmp" / "bin"
+            bin_dir.mkdir(parents=True)
+
+            # Proper project dir
+            project_dir = Path(tmpdir) / ".gemini" / "tmp" / "myproject"
+            project_dir.mkdir(parents=True)
+            (project_dir / ".project_root").write_text("/test/project")
+
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = _find_gemini_project_dir("/test/project")
+                assert result == project_dir
+
+    def test_gemini_normalizes_paths(self):
+        """Path comparison should handle trailing slashes and normalization."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir) / ".gemini" / "tmp" / "myproject"
+            project_dir.mkdir(parents=True)
+            (project_dir / ".project_root").write_text("/test/project")
+
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                # Trailing slash
+                result = _find_gemini_project_dir("/test/project/")
+                assert result == project_dir
+
+                # Double slash
+                result = _find_gemini_project_dir("/test//project")
+                assert result == project_dir
+
+    def test_gemini_handles_newline_in_project_root(self):
+        """Should handle .project_root files with trailing newlines."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir) / ".gemini" / "tmp" / "myproject"
+            project_dir.mkdir(parents=True)
+            (project_dir / ".project_root").write_text("/test/project\n")
+
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = _find_gemini_project_dir("/test/project")
+                assert result == project_dir
+
+    def test_gemini_returns_none_when_gemini_dir_missing(self):
+        """Should return None when ~/.gemini/tmp doesn't exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = _find_gemini_project_dir("/test/project")
+                assert result is None
+
+    def test_gemini_handles_corrupt_project_root(self):
+        """Should skip .project_root files with invalid bytes."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create dir with corrupt .project_root
+            corrupt_dir = Path(tmpdir) / ".gemini" / "tmp" / "corrupt"
+            corrupt_dir.mkdir(parents=True)
+            (corrupt_dir / ".project_root").write_bytes(b"\x80\x81\x82\xff")
+
+            # Create valid project dir
+            project_dir = Path(tmpdir) / ".gemini" / "tmp" / "myproject"
+            project_dir.mkdir(parents=True)
+            (project_dir / ".project_root").write_text("/test/project")
+
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = _find_gemini_project_dir("/test/project")
+                assert result == project_dir
+
+    def test_gemini_handles_relative_input_path(self):
+        """Should resolve relative paths before comparison."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir) / ".gemini" / "tmp" / "myproject"
+            project_dir.mkdir(parents=True)
+            cwd = os.getcwd()
+            (project_dir / ".project_root").write_text(cwd)
+
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = _find_gemini_project_dir(".")
+                assert result == project_dir
 
     def test_opencode_project_id_lookup(self):
         """OpenCode projectID should be looked up from config files, not computed."""
@@ -109,7 +197,6 @@ class TestProjectHashComputation:
             test_path = os.path.join(tmpdir, "project")
             os.makedirs(test_path)
 
-            # Create a mock project config file
             project_dir = Path(tmpdir) / ".local" / "share" / "opencode" / "storage" / "project"
             project_dir.mkdir(parents=True)
             import json
@@ -118,7 +205,6 @@ class TestProjectHashComputation:
             with open(project_file, "w") as f:
                 json.dump({"id": project_id, "worktree": os.path.abspath(test_path)}, f)
 
-            # Lookup should find the project
             with patch.object(Path, 'home', return_value=Path(tmpdir)):
                 result = _get_opencode_project_id(test_path)
                 assert result == project_id
@@ -126,7 +212,6 @@ class TestProjectHashComputation:
     def test_opencode_project_id_returns_none_for_unknown(self):
         """OpenCode projectID lookup should return None for unknown projects."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # No project config files exist
             project_dir = Path(tmpdir) / ".local" / "share" / "opencode" / "storage" / "project"
             project_dir.mkdir(parents=True)
 
@@ -134,14 +219,94 @@ class TestProjectHashComputation:
                 result = _get_opencode_project_id("/some/unknown/path")
                 assert result is None
 
-    def test_relative_path_produces_consistent_hash(self):
-        """Relative and absolute paths to same dir should produce same hash."""
-        cwd = os.getcwd()
-        # Use absolute and relative paths
-        abs_hash = _get_gemini_project_hash(cwd)
-        rel_hash = _get_gemini_project_hash(".")
+    def test_opencode_handles_trailing_slash(self):
+        """OpenCode should match projects with trailing slash differences."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_path = os.path.join(tmpdir, "project")
+            os.makedirs(test_path)
 
-        assert abs_hash == rel_hash
+            project_dir = Path(tmpdir) / ".local" / "share" / "opencode" / "storage" / "project"
+            project_dir.mkdir(parents=True)
+            import json
+            project_id = "mock_project_id_12345"
+            project_file = project_dir / f"{project_id}.json"
+            with open(project_file, "w") as f:
+                json.dump({"id": project_id, "worktree": test_path + "/"}, f)
+
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = _get_opencode_project_id(test_path)
+                assert result == project_id
+
+    def test_opencode_handles_null_worktree(self):
+        """OpenCode should skip project configs with null/missing worktree."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir) / ".local" / "share" / "opencode" / "storage" / "project"
+            project_dir.mkdir(parents=True)
+            import json
+
+            # Project with null worktree
+            null_file = project_dir / "null_project.json"
+            with open(null_file, "w") as f:
+                json.dump({"id": "null_project", "worktree": None}, f)
+
+            # Project with missing worktree
+            missing_file = project_dir / "missing_project.json"
+            with open(missing_file, "w") as f:
+                json.dump({"id": "missing_project"}, f)
+
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = _get_opencode_project_id("/test/project")
+                assert result is None
+
+    def test_opencode_handles_expanduser_worktree(self):
+        """OpenCode should expand ~ in stored worktree paths."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = str(Path.home())
+
+            project_dir = Path(tmpdir) / ".local" / "share" / "opencode" / "storage" / "project"
+            project_dir.mkdir(parents=True)
+            import json
+            project_id = "expanduser_project"
+            project_file = project_dir / f"{project_id}.json"
+            with open(project_file, "w") as f:
+                json.dump({"id": project_id, "worktree": "~/repos/testproject"}, f)
+
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = _get_opencode_project_id(os.path.join(home, "repos", "testproject"))
+                assert result == project_id
+
+    def test_opencode_skips_non_string_project_id(self):
+        """OpenCode should skip project configs with non-string id."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir) / ".local" / "share" / "opencode" / "storage" / "project"
+            project_dir.mkdir(parents=True)
+            import json
+
+            # Project with numeric id
+            bad_file = project_dir / "bad_project.json"
+            with open(bad_file, "w") as f:
+                json.dump({"id": 12345, "worktree": "/test/project"}, f)
+
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = _get_opencode_project_id("/test/project")
+                assert result is None
+
+    def test_opencode_handles_relative_input_path(self):
+        """OpenCode should resolve relative paths before comparison."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cwd = os.getcwd()
+
+            project_dir = Path(tmpdir) / ".local" / "share" / "opencode" / "storage" / "project"
+            project_dir.mkdir(parents=True)
+            import json
+            project_id = "mock_project_id_12345"
+            project_file = project_dir / f"{project_id}.json"
+            with open(project_file, "w") as f:
+                json.dump({"id": project_id, "worktree": cwd}, f)
+
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = _get_opencode_project_id(".")
+                assert result == project_id
 
 
 class TestAsyncSessionParsing:
@@ -247,9 +412,10 @@ class TestGeminiSessionDiscovery:
     @pytest.mark.asyncio
     async def test_returns_false_when_no_gemini_dir(self):
         """Should return False when ~/.gemini/tmp doesn't exist."""
-        with patch.object(Path, 'exists', return_value=False):
-            result = await get_gemini_session_for_project("/some/path")
-            assert result is False
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = await get_gemini_session_for_project("/some/path")
+                assert result is False
 
     @pytest.mark.asyncio
     async def test_returns_false_when_no_working_directory(self):
@@ -258,16 +424,17 @@ class TestGeminiSessionDiscovery:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_scoped_by_project_hash(self):
-        """Session search should be scoped to the project's hash directory."""
+    async def test_scoped_by_project_root(self):
+        """Session search should be scoped by .project_root file matching."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            gemini_dir = Path(tmpdir) / ".gemini" / "tmp"
-            project_hash = _get_gemini_project_hash("/test/project")
-            project_dir = gemini_dir / project_hash / "chats"
-            project_dir.mkdir(parents=True)
+            # Create project dir with .project_root
+            gemini_dir = Path(tmpdir) / ".gemini" / "tmp" / "testproject"
+            chats_dir = gemini_dir / "chats"
+            chats_dir.mkdir(parents=True)
+            (gemini_dir / ".project_root").write_text("/test/project")
 
             # Create a session file
-            session_file = project_dir / "session-abc123.json"
+            session_file = chats_dir / "session-abc123.json"
             session_file.touch()
 
             with patch.object(Path, 'home', return_value=Path(tmpdir)):
@@ -277,6 +444,29 @@ class TestGeminiSessionDiscovery:
 
                 # Should not find session for different project
                 result = await get_gemini_session_for_project("/other/project")
+                assert result is False
+
+    @pytest.mark.asyncio
+    async def test_respects_since_mtime_filter(self):
+        """Should ignore sessions older than since_mtime."""
+        import time
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gemini_dir = Path(tmpdir) / ".gemini" / "tmp" / "testproject"
+            chats_dir = gemini_dir / "chats"
+            chats_dir.mkdir(parents=True)
+            (gemini_dir / ".project_root").write_text("/test/project")
+
+            # Create an old session file
+            session_file = chats_dir / "session-old.json"
+            session_file.touch()
+            old_mtime = time.time() - 3600
+            os.utime(session_file, (old_mtime, old_mtime))
+
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                # Should be filtered out by since_mtime
+                result = await get_gemini_session_for_project(
+                    "/test/project", since_mtime=time.time()
+                )
                 assert result is False
 
 
@@ -348,3 +538,40 @@ class TestServerValidation:
         # Invalid references
         assert not runner.validate_session_id("--help")
         assert not runner.validate_session_id("abc")
+
+
+class TestGeminiParseSessionIdEndToEnd:
+    """End-to-end test for GeminiRunner.parse_session_id()."""
+
+    @pytest.mark.asyncio
+    async def test_parse_session_id_returns_1_with_valid_session(self):
+        """parse_session_id should return '1' when a matching session exists."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gemini_dir = Path(tmpdir) / ".gemini" / "tmp" / "testproject"
+            chats_dir = gemini_dir / "chats"
+            chats_dir.mkdir(parents=True)
+            (gemini_dir / ".project_root").write_text("/test/project")
+
+            session_file = chats_dir / "session-abc123.json"
+            session_file.touch()
+
+            runner = GeminiRunner()
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = await runner.parse_session_id(
+                    "", working_directory="/test/project"
+                )
+                assert result == "1"
+
+    @pytest.mark.asyncio
+    async def test_parse_session_id_returns_none_for_no_match(self):
+        """parse_session_id should return None when no matching project exists."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Empty gemini tmp dir
+            (Path(tmpdir) / ".gemini" / "tmp").mkdir(parents=True)
+
+            runner = GeminiRunner()
+            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+                result = await runner.parse_session_id(
+                    "", working_directory="/nonexistent/project"
+                )
+                assert result is None

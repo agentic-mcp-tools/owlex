@@ -27,7 +27,7 @@ def _get_opencode_project_id(working_directory: str) -> str | None:
     if not project_dir.exists():
         return None
 
-    abs_path = os.path.abspath(working_directory)
+    abs_path = os.path.normpath(os.path.abspath(os.path.expanduser(working_directory)))
 
     # Scan project files to find one matching our working directory
     try:
@@ -37,9 +37,16 @@ def _get_opencode_project_id(working_directory: str) -> str | None:
             try:
                 with open(project_file) as f:
                     project_data = json.load(f)
-                    if project_data.get("worktree") == abs_path:
-                        return project_data.get("id")
-            except (json.JSONDecodeError, OSError):
+                    stored_worktree = project_data.get("worktree")
+                    if not isinstance(stored_worktree, str):
+                        continue
+                    normalized_worktree = os.path.normpath(os.path.abspath(os.path.expanduser(stored_worktree)))
+                    if normalized_worktree == abs_path:
+                        project_id = project_data.get("id")
+                        if not isinstance(project_id, str):
+                            continue
+                        return project_id
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
                 continue
     except OSError:
         return None
