@@ -151,12 +151,15 @@ class GeminiRunner(AgentRunner):
         if working_directory:
             full_command.extend(["--include-directories", working_directory])
 
-        # Pass prompt via stdin to prevent prompt-as-flag injection
-        # Gemini reads from stdin when no positional prompt is provided
-        # This ensures prompts starting with - aren't parsed as CLI flags
+        # Use -p/--prompt for non-interactive (headless) mode
+        # Without -p, Gemini enters interactive mode and never exits
+        # The -p flag takes the prompt as its value, so prompts starting
+        # with - are safe (they're the flag's argument, not parsed as flags)
+        full_command.extend(["-p", prompt])
+
         return AgentCommand(
             command=full_command,
-            prompt=prompt,  # Prompt passed via stdin
+            prompt="",  # Prompt is in command via -p flag
             cwd=working_directory,
             output_prefix="Gemini Output",
             not_found_hint="Please ensure Gemini CLI is installed (npm install -g @google/gemini-cli).",
@@ -182,10 +185,12 @@ class GeminiRunner(AgentRunner):
 
         full_command.extend(["-r", session_ref])
 
-        # Pass prompt via stdin to prevent prompt-as-flag injection
+        # Use -p for non-interactive mode (same as exec)
+        full_command.extend(["-p", prompt])
+
         return AgentCommand(
             command=full_command,
-            prompt=prompt,  # Prompt passed via stdin
+            prompt="",  # Prompt is in command via -p flag
             cwd=working_directory,
             output_prefix="Gemini Resume Output",
             not_found_hint="Please ensure Gemini CLI is installed (npm install -g @google/gemini-cli).",

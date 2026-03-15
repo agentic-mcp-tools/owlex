@@ -188,8 +188,9 @@ class TestGeminiRunner:
             cmd = runner.build_exec_command(prompt="Hello")
 
             assert cmd.command[0] == "gemini"
-            assert "Hello" not in cmd.command  # Prompt is via stdin, not CLI arg
-            assert cmd.prompt == "Hello"  # Prompt passed via stdin
+            assert "-p" in cmd.command  # Prompt via -p flag for headless mode
+            assert "Hello" in cmd.command
+            assert cmd.prompt == ""  # Prompt is in command, not stdin
             assert cmd.output_prefix == "Gemini Output"
             assert cmd.stream is True
 
@@ -240,7 +241,9 @@ class TestGeminiRunner:
 
             assert "-r" in cmd.command
             assert "latest" in cmd.command
-            assert cmd.prompt == "Continue"  # Prompt passed via stdin
+            assert "-p" in cmd.command
+            assert "Continue" in cmd.command
+            assert cmd.prompt == ""  # Prompt is in command via -p flag
             assert cmd.stream is False  # Resume uses non-streaming
 
     def test_resume_with_yolo(self, runner):
@@ -281,18 +284,18 @@ class TestGeminiRunner:
             assert "--enable" not in cmd.command
 
     def test_exec_handles_dash_prompt(self, runner):
-        """Should use stdin to prevent prompts being parsed as flags."""
+        """Dash prompts are safe as -p flag argument, not parsed as CLI flags."""
         with patch("owlex.agents.gemini.config") as mock_config:
             mock_config.gemini.yolo_mode = False
 
             cmd = runner.build_exec_command(prompt="-malicious prompt")
 
-            # Prompt should be passed via stdin, not in command
-            assert "-malicious prompt" not in cmd.command
-            assert cmd.prompt == "-malicious prompt"
+            # Prompt is passed as -p flag's argument, safe from flag parsing
+            idx = cmd.command.index("-p")
+            assert cmd.command[idx + 1] == "-malicious prompt"
 
     def test_resume_handles_dash_prompt(self, runner):
-        """Resume should use stdin to prevent prompts being parsed as flags."""
+        """Dash prompts are safe as -p flag argument in resume mode."""
         with patch("owlex.agents.gemini.config") as mock_config:
             mock_config.gemini.yolo_mode = False
 
@@ -301,9 +304,9 @@ class TestGeminiRunner:
                 prompt="--dangerous"
             )
 
-            # Prompt should be passed via stdin, not in command
-            assert "--dangerous" not in cmd.command
-            assert cmd.prompt == "--dangerous"
+            # Prompt is passed as -p flag's argument, safe from flag parsing
+            idx = cmd.command.index("-p")
+            assert cmd.command[idx + 1] == "--dangerous"
 
 
 class TestOpenCodeRunner:
