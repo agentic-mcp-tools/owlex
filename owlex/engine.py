@@ -273,6 +273,9 @@ class TaskEngine:
         """
         if timeout is None:
             timeout = config.default_timeout
+        # timeout <= 0 means no timeout (wait indefinitely)
+        if timeout <= 0:
+            timeout = None
 
         import os as _os
 

@@ -262,7 +262,8 @@ class Council:
                 # Clean start for R1 - session ID captured after completion
                 await self._engine.run_agent(
                     codex_task, codex_runner, mode="exec",
-                    prompt=_codex_prompt, working_directory=working_directory, enable_search=config.codex.enable_search
+                    prompt=_codex_prompt, working_directory=working_directory, enable_search=config.codex.enable_search,
+                    timeout=timeout or 0,
                 )
                 elapsed = (datetime.now() - round1_start).total_seconds()
                 status = "completed" if codex_task.status == "completed" else "failed"
@@ -290,7 +291,8 @@ class Council:
                 # Clean start for R1 - session ID captured after completion
                 await self._engine.run_agent(
                     gemini_task, gemini_runner, mode="exec",
-                    prompt=_gemini_prompt, working_directory=working_directory
+                    prompt=_gemini_prompt, working_directory=working_directory,
+                    timeout=timeout or 0,
                 )
                 elapsed = (datetime.now() - round1_start).total_seconds()
                 status = "completed" if gemini_task.status == "completed" else "failed"
@@ -318,7 +320,8 @@ class Council:
                 # Clean start for R1 - session ID captured after completion
                 await self._engine.run_agent(
                     opencode_task, opencode_runner, mode="exec",
-                    prompt=_opencode_prompt, working_directory=working_directory
+                    prompt=_opencode_prompt, working_directory=working_directory,
+                    timeout=timeout or 0,
                 )
                 elapsed = (datetime.now() - round1_start).total_seconds()
                 status = "completed" if opencode_task.status == "completed" else "failed"
@@ -346,7 +349,8 @@ class Council:
                 # Clean start for R1 - session ID captured after completion
                 await self._engine.run_agent(
                     claudeor_task, claudeor_runner, mode="exec",
-                    prompt=_claudeor_prompt, working_directory=working_directory
+                    prompt=_claudeor_prompt, working_directory=working_directory,
+                    timeout=timeout or 0,
                 )
                 elapsed = (datetime.now() - round1_start).total_seconds()
                 status = "completed" if claudeor_task.status == "completed" else "failed"
@@ -374,7 +378,8 @@ class Council:
             async def run_aichat():
                 await self._engine.run_agent(
                     aichat_task, aichat_runner, mode="exec",
-                    prompt=_aichat_prompt, working_directory=working_directory
+                    prompt=_aichat_prompt, working_directory=working_directory,
+                    timeout=timeout or 0,
                 )
                 elapsed = (datetime.now() - round1_start).total_seconds()
                 status = "completed" if aichat_task.status == "completed" else "failed"
@@ -600,13 +605,15 @@ class Council:
                         codex_delib_task, codex_runner, mode="resume",
                         session_ref=_codex_session,
                         prompt=_codex_delib_prompt_resume, working_directory=working_directory,
-                        enable_search=config.codex.enable_search
+                        enable_search=config.codex.enable_search,
+                        timeout=timeout or 0,
                     )
                 else:
                     await self._engine.run_agent(
                         codex_delib_task, codex_runner, mode="exec",
                         prompt=_codex_delib_prompt_exec, working_directory=working_directory,
-                        enable_search=config.codex.enable_search
+                        enable_search=config.codex.enable_search,
+                        timeout=timeout or 0,
                     )
                 elapsed = (datetime.now() - round2_start).total_seconds()
                 self.log(f"Codex revised ({elapsed:.1f}s)")
@@ -662,12 +669,14 @@ class Council:
                     await self._engine.run_agent(
                         gemini_delib_task, gemini_runner, mode="resume",
                         session_ref=_gemini_session,
-                        prompt=_gemini_delib_prompt_resume, working_directory=working_directory
+                        prompt=_gemini_delib_prompt_resume, working_directory=working_directory,
+                        timeout=timeout or 0,
                     )
                 else:
                     await self._engine.run_agent(
                         gemini_delib_task, gemini_runner, mode="exec",
-                        prompt=_gemini_delib_prompt_exec, working_directory=working_directory
+                        prompt=_gemini_delib_prompt_exec, working_directory=working_directory,
+                        timeout=timeout or 0,
                     )
                 elapsed = (datetime.now() - round2_start).total_seconds()
                 self.log(f"Gemini revised ({elapsed:.1f}s)")
@@ -723,12 +732,14 @@ class Council:
                     await self._engine.run_agent(
                         opencode_delib_task, opencode_runner, mode="resume",
                         session_ref=_opencode_session,
-                        prompt=_opencode_delib_prompt_resume, working_directory=working_directory
+                        prompt=_opencode_delib_prompt_resume, working_directory=working_directory,
+                        timeout=timeout or 0,
                     )
                 else:
                     await self._engine.run_agent(
                         opencode_delib_task, opencode_runner, mode="exec",
-                        prompt=_opencode_delib_prompt_exec, working_directory=working_directory
+                        prompt=_opencode_delib_prompt_exec, working_directory=working_directory,
+                        timeout=timeout or 0,
                     )
                 elapsed = (datetime.now() - round2_start).total_seconds()
                 self.log(f"OpenCode revised ({elapsed:.1f}s)")
@@ -784,12 +795,14 @@ class Council:
                     await self._engine.run_agent(
                         claudeor_delib_task, claudeor_runner, mode="resume",
                         session_ref=_claudeor_session,
-                        prompt=_claudeor_delib_prompt_resume, working_directory=working_directory
+                        prompt=_claudeor_delib_prompt_resume, working_directory=working_directory,
+                        timeout=timeout or 0,
                     )
                 else:
                     await self._engine.run_agent(
                         claudeor_delib_task, claudeor_runner, mode="exec",
-                        prompt=_claudeor_delib_prompt_exec, working_directory=working_directory
+                        prompt=_claudeor_delib_prompt_exec, working_directory=working_directory,
+                        timeout=timeout or 0,
                     )
                 elapsed = (datetime.now() - round2_start).total_seconds()
                 model_name = config.claudeor.model or "Claude/OpenRouter"
@@ -842,12 +855,14 @@ class Council:
                     await self._engine.run_agent(
                         aichat_delib_task, aichat_runner, mode="resume",
                         session_ref=_aichat_session,
-                        prompt=_aichat_delib_prompt_resume, working_directory=working_directory
+                        prompt=_aichat_delib_prompt_resume, working_directory=working_directory,
+                        timeout=timeout or 0,
                     )
                 else:
                     await self._engine.run_agent(
                         aichat_delib_task, aichat_runner, mode="exec",
-                        prompt=_aichat_delib_prompt_exec, working_directory=working_directory
+                        prompt=_aichat_delib_prompt_exec, working_directory=working_directory,
+                        timeout=timeout or 0,
                     )
                 elapsed = (datetime.now() - round2_start).total_seconds()
                 model_name = config.aichat.model or "AiChat"
