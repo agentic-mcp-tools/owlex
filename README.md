@@ -4,6 +4,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
+[![MCPAmpel](https://img.shields.io/endpoint?url=https://mcpampel.com/badge/agentic-mcp-tools/owlex.json)](https://mcpampel.com/repo/agentic-mcp-tools/owlex)
 
 **Get a second opinion without leaving Claude Code.**
 
