@@ -60,6 +60,26 @@ def build_agent_response(
 # Type alias for notification callback
 NotifyCallback = Callable[[str, str], Any] | None
 
+
+async def send_mcp_log(context: Any, level: str, message: str, logger: str = "owlex") -> None:
+    """Send an unsolicited MCP log message via the context's session.
+
+    Bypasses ctx.info/warning/error because those tag notifications with the
+    originating request_id — when called from background tasks after the tool
+    call has returned, that id is stale and can cause clients to drop the
+    stdio connection.
+    """
+    if context is None:
+        return
+    session = getattr(context, 'session', None)
+    send = getattr(session, 'send_log_message', None) if session else None
+    if send is None:
+        return
+    try:
+        await asyncio.shield(send(level=level, data=message, logger=logger))
+    except Exception as e:
+        print(f"[ERROR] MCP log send failed ({level}): {e}", file=sys.stderr, flush=True)
+
 # Agent runner instances - available for import by other modules
 codex_runner = CodexRunner()
 gemini_runner = GeminiRunner()
@@ -176,17 +196,8 @@ class TaskEngine:
         return self.tasks.get(task_id)
 
     async def _send_notification(self, task: Task, level: str, message: str):
-        """Send notification via task context if available."""
-        if not task.context:
-            return
-        handler = getattr(task.context, level, None)
-        if not callable(handler):
-            handler = getattr(task.context, 'info', None)
-        if handler:
-            try:
-                await asyncio.shield(handler(message))
-            except Exception as e:
-                print(f"[ERROR] Failed to send {level} notification: {e}", file=sys.stderr, flush=True)
+        """Send background-safe MCP log notification (no stale related_request_id)."""
+        await send_mcp_log(task.context, level, message)
 
     async def _emit_task_notification(self, task: Task):
         """Emit task completion/failure notification."""
@@ -209,7 +220,7 @@ class TaskEngine:
         task: Task,
         stream_name: str,
     ) -> str:
-        """Read stream line-by-line, storing lines and emitting notifications."""
+        """Buffer lines into task.output_lines; no per-line MCP notify (would flood stdio and carry stale request_id)."""
         lines = []
         while True:
             try:
@@ -219,11 +230,6 @@ class TaskEngine:
                 decoded = line.decode('utf-8', errors='replace').rstrip('\n\r')
                 lines.append(decoded)
                 task.output_lines.append(f"[{stream_name}] {decoded}")
-                if task.context:
-                    try:
-                        await task.context.info(f"[{task.task_id[:8]}] {decoded}")
-                    except Exception:
-                        pass
             except Exception:
                 break
         return '\n'.join(lines)
