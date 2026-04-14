@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from .config import config
-from .engine import engine, build_agent_response, codex_runner, gemini_runner, opencode_runner, claudeor_runner, aichat_runner
+from .engine import engine, build_agent_response, codex_runner, gemini_runner, opencode_runner, claudeor_runner, aichat_runner, send_mcp_log
 from .prompts import inject_role_prefix, build_deliberation_prompt_with_role
 from .roles import RoleSpec, RoleDefinition, RoleResolver, RoleId, get_resolver
 from .models import (
@@ -64,31 +64,21 @@ class Council:
         _log(msg)
 
     async def notify(self, message: str, level: str = "info", progress: float | None = None):
-        """Send notification to MCP client if context supports it."""
-        if not self.context:
+        """Send MCP log (and optional progress) notification to the client."""
+        if self.context is None:
             return
-        try:
-            session = getattr(self.context, 'session', None)
-            if not session:
-                return
-
-            # Try progress notification (more visible in Claude Code)
-            if hasattr(session, 'send_progress_notification') and progress is not None:
-                try:
-                    await session.send_progress_notification(
-                        progress_token="owlex-council",
-                        progress=progress,
-                        total=100.0,
-                        message=message,
-                    )
-                except Exception:
-                    pass
-
-            # Also send as log message
-            if hasattr(session, 'send_log_message'):
-                await session.send_log_message(level=level, data=message, logger="owlex")
-        except Exception:
-            pass
+        session = getattr(self.context, 'session', None)
+        if session is not None and progress is not None and hasattr(session, 'send_progress_notification'):
+            try:
+                await session.send_progress_notification(
+                    progress_token="owlex-council",
+                    progress=progress,
+                    total=100.0,
+                    message=message,
+                )
+            except Exception:
+                pass
+        await send_mcp_log(self.context, level, message)
 
     async def deliberate(
         self,

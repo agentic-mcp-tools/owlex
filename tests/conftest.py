@@ -5,6 +5,7 @@ Pytest fixtures for owlex tests.
 import asyncio
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -18,6 +19,20 @@ from owlex.engine import TaskEngine
 def engine():
     """Create a fresh TaskEngine for each test."""
     return TaskEngine()
+
+
+@pytest.fixture
+def mock_mcp_context():
+    """Mock MCP Context with a reachable session.send_log_message AsyncMock."""
+    session = MagicMock()
+    session.send_log_message = AsyncMock()
+    session.send_progress_notification = AsyncMock()
+    ctx = MagicMock()
+    ctx.session = session
+    ctx.info = AsyncMock()
+    ctx.warning = AsyncMock()
+    ctx.error = AsyncMock()
+    return ctx
 
 
 @pytest.fixture

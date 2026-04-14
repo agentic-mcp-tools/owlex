@@ -261,3 +261,43 @@ class TestTaskRegistry:
         assert engine.get_task(task1.task_id) is task1
         assert engine.get_task(task2.task_id) is task2
         assert len(engine.tasks) == 2
+
+
+class TestNotificationDecoupling:
+    """Background-task notifications must not reference a stale request_id."""
+
+    async def test_send_notification_uses_session_not_ctx_info(self, engine, mock_mcp_context):
+        task = engine.create_task(command="t", args={}, context=mock_mcp_context)
+
+        await engine._send_notification(task, "info", "hello")
+
+        send = mock_mcp_context.session.send_log_message
+        send.assert_awaited_once()
+        call_kwargs = send.await_args.kwargs
+        assert call_kwargs["level"] == "info"
+        assert call_kwargs["data"] == "hello"
+        assert call_kwargs["logger"] == "owlex"
+        assert "related_request_id" not in call_kwargs
+        mock_mcp_context.info.assert_not_called()
+
+    async def test_send_notification_no_context_is_noop(self, engine):
+        task = engine.create_task(command="t", args={})
+        await engine._send_notification(task, "info", "hello")
+
+    async def test_stream_reader_does_not_call_ctx_info_per_line(self, engine, helper_script_dir, mock_mcp_context):
+        task = engine.create_task(command="t", args={}, context=mock_mcp_context)
+
+        await engine.run_command(
+            task=task,
+            command=[sys.executable, str(helper_script_dir / "mixed_output.py")],
+            prompt="",
+            output_cleaner=lambda x, p: x,
+            output_prefix="Test",
+            timeout=5,
+            stream=True,
+        )
+
+        assert task.status == TaskStatus.COMPLETED.value
+        assert any("stdout line 1" in line for line in task.output_lines)
+        assert any("stderr line 1" in line for line in task.output_lines)
+        mock_mcp_context.info.assert_not_called()
