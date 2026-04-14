@@ -63,21 +63,8 @@ class Council:
         self.log_entries.append(msg)
         _log(msg)
 
-    async def notify(self, message: str, level: str = "info", progress: float | None = None):
-        """Send MCP log (and optional progress) notification to the client."""
-        if self.context is None:
-            return
-        session = getattr(self.context, 'session', None)
-        if session is not None and progress is not None and hasattr(session, 'send_progress_notification'):
-            try:
-                await session.send_progress_notification(
-                    progress_token="owlex-council",
-                    progress=progress,
-                    total=100.0,
-                    message=message,
-                )
-            except Exception:
-                pass
+    async def notify(self, message: str, level: str = "info"):
+        """Send an MCP log notification to the client."""
         await send_mcp_log(self.context, level, message)
 
     async def deliberate(
@@ -148,21 +135,21 @@ class Council:
         if role_msgs:
             roles_summary = ", ".join(role_msgs)
             self.log(f"Roles assigned: {roles_summary}")
-            await self.notify(f"Council roles: {roles_summary}", progress=10)
+            await self.notify(f"Council roles: {roles_summary}")
 
         # === Round 1: Parallel initial queries ===
         if claude_opinion and claude_opinion.strip():
             self.log(f"Claude's opinion received ({len(claude_opinion)} chars)")
 
         self.log(f"Round 1: querying {', '.join(a.title() for a in active_agents)}...")
-        await self.notify(f"Council Round 1: querying {', '.join(a.title() for a in active_agents)}", progress=20)
+        await self.notify(f"Council Round 1: querying {', '.join(a.title() for a in active_agents)}")
 
         round_1 = await self._run_round_1(prompt, working_directory, effective_timeout, resolved_roles)
-        await self.notify("Council Round 1 complete", progress=50)
+        await self.notify("Council Round 1 complete")
 
         round_2 = None
         if deliberate:
-            await self.notify("Council Round 2: deliberation phase", progress=60)
+            await self.notify("Council Round 2: deliberation phase")
             round_2 = await self._run_round_2(
                 prompt=prompt,
                 working_directory=working_directory,
@@ -182,7 +169,7 @@ class Council:
             )
 
         total_duration = (datetime.now() - council_start).total_seconds()
-        await self.notify(f"Council deliberation complete ({total_duration:.1f}s)", progress=100)
+        await self.notify(f"Council deliberation complete ({total_duration:.1f}s)")
 
         return CouncilResponse(
             prompt=prompt,
@@ -881,7 +868,7 @@ class Council:
 
         round2_elapsed = (datetime.now() - round2_start).total_seconds()
         self.log(f"Round 2 complete ({round2_elapsed:.1f}s)")
-        await self.notify("Council Round 2 complete", progress=90)
+        await self.notify("Council Round 2 complete")
 
         return CouncilRound(
             codex=build_agent_response(tasks["codex"], Agent.CODEX) if "codex" in tasks else None,

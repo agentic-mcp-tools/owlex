@@ -265,3 +265,36 @@ class TestCouncilConfig:
             )
 
             assert search_setting is False
+
+
+class TestCouncilNotify:
+    """Council.notify must not emit unsolicited progress notifications.
+
+    Claude Code's MCP client drops the stdio transport on progress
+    notifications with a progressToken it didn't opt into via
+    request._meta.progressToken.
+    """
+
+    async def test_notify_does_not_send_progress_notification(self, mock_mcp_context):
+        council = Council(context=mock_mcp_context)
+
+        await council.notify("deliberation starting")
+
+        mock_mcp_context.session.send_progress_notification.assert_not_called()
+
+    async def test_notify_sends_log_message(self, mock_mcp_context):
+        council = Council(context=mock_mcp_context)
+
+        await council.notify("round 1 complete", level="info")
+
+        send = mock_mcp_context.session.send_log_message
+        send.assert_awaited_once()
+        call_kwargs = send.await_args.kwargs
+        assert call_kwargs["data"] == "round 1 complete"
+        assert call_kwargs["level"] == "info"
+        assert call_kwargs["logger"] == "owlex"
+        assert "related_request_id" not in call_kwargs
+
+    async def test_notify_no_context_is_noop(self):
+        council = Council(context=None)
+        await council.notify("anything")
