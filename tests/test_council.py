@@ -265,3 +265,49 @@ class TestCouncilConfig:
             )
 
             assert search_setting is False
+
+
+class TestCouncilNotify:
+    """Tests for the MCP notification helper."""
+
+    async def test_progress_notifications_are_not_sent(self):
+        """council_ask is async — progress would arrive after the originating
+        request closed and the client deregistered its callback. Strict
+        clients drop the transport on the resulting unknown token, so the
+        helper must not call send_progress_notification at all."""
+        session = MagicMock()
+        session.send_progress_notification = AsyncMock()
+        session.send_log_message = AsyncMock()
+
+        meta = MagicMock()
+        meta.progressToken = "anything"
+        request_context = MagicMock()
+        request_context.meta = meta
+
+        context = MagicMock()
+        context.session = session
+        context.request_context = request_context
+
+        council = Council(context=context)
+        await council.notify("hello", progress=10.0)
+
+        session.send_progress_notification.assert_not_awaited()
+
+    async def test_log_messages_still_flow(self):
+        """Log messages are not subject to the progress-token issue and
+        continue to provide CLI visibility."""
+        session = MagicMock()
+        session.send_log_message = AsyncMock()
+
+        context = MagicMock()
+        context.session = session
+        context.request_context = MagicMock()
+
+        council = Council(context=context)
+        await council.notify("hello", level="info", progress=10.0)
+
+        session.send_log_message.assert_awaited_once()
+        kwargs = session.send_log_message.await_args.kwargs
+        assert kwargs["data"] == "hello"
+        assert kwargs["level"] == "info"
+        assert kwargs["logger"] == "owlex"

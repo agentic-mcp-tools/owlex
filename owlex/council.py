@@ -64,7 +64,19 @@ class Council:
         _log(msg)
 
     async def notify(self, message: str, level: str = "info", progress: float | None = None):
-        """Send notification to MCP client if context supports it."""
+        """Send notification to MCP client if context supports it.
+
+        Progress notifications (`notifications/progress`) are intentionally
+        not emitted. `council_ask` returns a task_id synchronously and the
+        deliberation runs in the background; any progress notification the
+        engine fires arrives AFTER the originating `tools/call` response,
+        when the client has already completed and deregistered its
+        callback for that request id. Spec-strict clients (e.g. Claude
+        Code) treat the resulting "unknown progressToken" as a protocol
+        violation and drop the stdio transport.
+
+        Log messages have no such constraint and continue to flow.
+        """
         if not self.context:
             return
         try:
@@ -72,19 +84,6 @@ class Council:
             if not session:
                 return
 
-            # Try progress notification (more visible in Claude Code)
-            if hasattr(session, 'send_progress_notification') and progress is not None:
-                try:
-                    await session.send_progress_notification(
-                        progress_token="owlex-council",
-                        progress=progress,
-                        total=100.0,
-                        message=message,
-                    )
-                except Exception:
-                    pass
-
-            # Also send as log message
             if hasattr(session, 'send_log_message'):
                 await session.send_log_message(level=level, data=message, logger="owlex")
         except Exception:
